@@ -73,28 +73,28 @@ class RRTNode(Node):
         self.step_size = 0.1
         self.max_iters = 5000
 
-        self.get_logger().info("✅ RRT Planner Node Initialized")
+        self.get_logger().info("RRT Planner Node Initialized")
 
     def obstacle_center_callback(self, msg: Float32MultiArray):
         self.obstacle_center = msg.data
-        self.get_logger().info(f"Updated obstacle_center: {self.obstacle_center}")
+        #self.get_logger().info(f"Updated obstacle_center: {self.obstacle_center}")
 
     def obstacle_radius_callback(self, msg: Float32):
         self.obstacle_radius = msg.data
-        self.get_logger().info(f"Updated obstacle_radius: {self.obstacle_radius}")
+        #self.get_logger().info(f"Updated obstacle_radius: {self.obstacle_radius}")
 
     def workspace_radius_callback(self, msg: Float32):
         self.workspace_radius = msg.data
-        self.get_logger().info(f"Updated workspace_radius: {self.workspace_radius}")
+        #self.get_logger().info(f"Updated workspace_radius: {self.workspace_radius}")
 
     def target_position_callback(self, msg: Float32MultiArray):
         self.target_position = msg.data[:3]  # Extract x, y, z for 3D planning
-        self.get_logger().info(f"Updated target_position: {self.target_position}")
+        #self.get_logger().info(f"Updated target_position: {self.target_position}")
         self.publish_goal_marker()  # Publish the goal marker
 
     def starting_position_callback(self, msg: PoseStamped):
         self.starting_position = [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]  # Extract x, y, z
-        self.get_logger().info(f"Updated starting_position: {self.starting_position}")
+        #self.get_logger().info(f"Updated starting_position: {self.starting_position}")
 
     def plan_path(self):
         # Use the obstacle center and radius directly
@@ -105,10 +105,11 @@ class RRTNode(Node):
 
         # Check if the starting or target position is inside an obstacle
         if self.is_point_in_obstacle(self.starting_position, obstacles) or self.is_point_in_obstacle(self.target_position, obstacles):
-            self.get_logger().warn("Starting position or target position inside obstacle. Skipping.")
+            self.get_logger().info(f"Start or target position is inside an obstacle. Cannot plan path.")
             return
 
         # Build the RRT path
+        start_time = time.perf_counter()  # Start timing
         path, duration = self.build_rrt(
             self.starting_position,
             self.target_position,
@@ -118,13 +119,13 @@ class RRTNode(Node):
             self.step_size,
             self.max_iters
         )
+        end_time = time.perf_counter()  # End timing
 
         # Publish the path if found
         if path:
-            self.get_logger().info(f"Path found in {duration:.4f} seconds.")
             self.publish_path(path)
-        else:
-            self.get_logger().warn("No path found.")
+        # Log the execution time
+        self.get_logger().info(f"RRT execution time: {end_time - start_time:.4f} seconds")
 
     def distance(self, p1, p2):
         return math.hypot(p2[0] - p1[0], p2[1] - p1[1])

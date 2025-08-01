@@ -3,6 +3,7 @@ from rclpy.node import Node
 from std_msgs.msg import Float32, Float32MultiArray
 from geometry_msgs.msg import PoseStamped
 from visualization_msgs.msg import Marker, MarkerArray
+from nav_msgs.msg import Path
 
 
 class LineVisualizerNode(Node):
@@ -53,6 +54,12 @@ class LineVisualizerNode(Node):
             '/visualization_marker_array',
             10
         )
+        # Publisher for RViz trajectory display
+        self.path_publisher = self.create_publisher(
+            Path,
+            '/rrt_trajectory',
+            10
+        )
 
         self.get_logger().info("✅ Line Visualizer Node Initialized")
 
@@ -79,7 +86,7 @@ class LineVisualizerNode(Node):
     def path_callback(self, msg: Float32MultiArray):
         path = [msg.data[i:i+3] for i in range(0, len(msg.data), 3)]
         self.get_logger().info(f"Received path with {len(path)} points.")
-        self.publish_path_marker(path)
+        self.publish_path_trajectory(path)
 
     def publish_markers(self):
         # Create a MarkerArray
@@ -148,37 +155,25 @@ class LineVisualizerNode(Node):
         # Publish the markers
         self.marker_publisher.publish(marker_array)
 
-    def publish_path_marker(self, path):
-        from geometry_msgs.msg import Point
+    def publish_path_trajectory(self, path):
+        # Create a Path message
+        path_msg = Path()
+        path_msg.header.frame_id = "base_link"  # Replace with your robot's base frame
+        path_msg.header.stamp = self.get_clock().now().to_msg()
 
-        # Create a Marker for the path
-        path_marker = Marker()
-        path_marker.header.frame_id = "base_link"  # Replace with your robot's base frame
-        path_marker.header.stamp = self.get_clock().now().to_msg()
-        path_marker.ns = "path_marker"
-        path_marker.id = 3
-        path_marker.type = Marker.LINE_STRIP
-        path_marker.action = Marker.ADD
-        path_marker.scale.x = 0.05  # Line width
-        path_marker.color.r = 0.0
-        path_marker.color.g = 0.0
-        path_marker.color.b = 1.0  # Blue for path
-        path_marker.color.a = 1.0
-
-        # Add points to the path marker
+        # Convert the path points to PoseStamped messages
         for point in path:
-            path_point = Point()
-            path_point.x = point[0]
-            path_point.y = point[1]
-            path_point.z = point[2]
-            path_marker.points.append(path_point)
+            pose = PoseStamped()
+            pose.header.frame_id = "base_link"
+            pose.header.stamp = self.get_clock().now().to_msg()
+            pose.pose.position.x = point[0]
+            pose.pose.position.y = point[1]
+            pose.pose.position.z = point[2]
+            pose.pose.orientation.w = 1.0  # Default orientation
+            path_msg.poses.append(pose)
 
-        # Wrap the path marker in a MarkerArray
-        marker_array = MarkerArray()
-        marker_array.markers.append(path_marker)
-
-        # Publish the MarkerArray
-        self.marker_publisher.publish(marker_array)
+        # Publish the Path message
+        self.path_publisher.publish(path_msg)
 
 
 def main(args=None):
