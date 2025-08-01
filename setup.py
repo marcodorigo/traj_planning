@@ -20,6 +20,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'rrt_planner_node = traj_planning.rrt_planner_node:main',
+            'line_visualizer_node = traj_planning.line_visualizer_node:main',  # Added line_visualizer_node
         ],
     },
 )

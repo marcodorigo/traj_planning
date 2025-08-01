@@ -2,6 +2,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32, Float32MultiArray
 from geometry_msgs.msg import PoseStamped
+from visualization_msgs.msg import Marker
 import random
 import math
 import time
@@ -53,6 +54,20 @@ class RRTNode(Node):
             10
         )
 
+        # Publisher for visualizing the goal point in RViz
+        self.marker_publisher = self.create_publisher(
+            Marker,
+            '/visualization_marker',
+            10
+        )
+
+        # Publisher for the computed path
+        self.path_publisher = self.create_publisher(
+            Float32MultiArray,
+            '/rrt_path',
+            10
+        )
+
         # RRT parameters
         self.goal_sample_rate = 0.1
         self.step_size = 0.1
@@ -75,23 +90,39 @@ class RRTNode(Node):
     def target_position_callback(self, msg: Float32MultiArray):
         self.target_position = msg.data[:3]  # Extract x, y, z for 3D planning
         self.get_logger().info(f"Updated target_position: {self.target_position}")
+        self.publish_goal_marker()  # Publish the goal marker
 
     def starting_position_callback(self, msg: PoseStamped):
         self.starting_position = [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]  # Extract x, y, z
         self.get_logger().info(f"Updated starting_position: {self.starting_position}")
 
     def plan_path(self):
-        obstacles = self.generate_random_obstacles(self.obstacle_center, self.obstacle_radius)
+        # Use the obstacle center and radius directly
+        if self.obstacle_radius > 0:
+            obstacles = [(self.obstacle_center[0], self.obstacle_center[1], self.obstacle_center[2], self.obstacle_radius)]
+        else:
+            obstacles = []
 
+        # Check if the starting or target position is inside an obstacle
         if self.is_point_in_obstacle(self.starting_position, obstacles) or self.is_point_in_obstacle(self.target_position, obstacles):
             self.get_logger().warn("Starting position or target position inside obstacle. Skipping.")
             return
 
-        path, duration = self.build_rrt(self.starting_position, self.target_position, obstacles, self.workspace_radius, self.goal_sample_rate, self.step_size, self.max_iters)
+        # Build the RRT path
+        path, duration = self.build_rrt(
+            self.starting_position,
+            self.target_position,
+            obstacles,
+            self.workspace_radius,
+            self.goal_sample_rate,
+            self.step_size,
+            self.max_iters
+        )
 
+        # Publish the path if found
         if path:
             self.get_logger().info(f"Path found in {duration:.4f} seconds.")
-            self.plot_path(path, obstacles, self.starting_position, self.target_position, self.workspace_radius)
+            self.publish_path(path)
         else:
             self.get_logger().warn("No path found.")
 
@@ -99,15 +130,17 @@ class RRTNode(Node):
         return math.hypot(p2[0] - p1[0], p2[1] - p1[1])
 
     def line_circle_collision(self, p1, p2, circle):
-        cx, cy, r = circle
+        cx, cy, cz, r = circle  # Unpack the 3D center and radius
         dx = p2[0] - p1[0]
         dy = p2[1] - p1[1]
+        dz = p2[2] - p1[2]
         fx = p1[0] - cx
         fy = p1[1] - cy
+        fz = p1[2] - cz
 
-        a = dx * dx + dy * dy
-        b = 2 * (fx * dx + fy * dy)
-        c = fx * fx + fy * fy - r * r
+        a = dx * dx + dy * dy + dz * dz
+        b = 2 * (fx * dx + fy * dy + fz * dz)
+        c = fx * fx + fy * fy + fz * fz - r * r
 
         discriminant = b * b - 4 * a * c
         if discriminant < 0:
@@ -137,7 +170,8 @@ class RRTNode(Node):
     def build_rrt(self, start, goal, obstacles, radius, goal_sample_rate, step_size=0.1, max_iters=5000):
         start_time = time.perf_counter()
 
-        start_node = Node(start)
+        # Use the custom RRTTreeNode class
+        start_node = RRTTreeNode(start)
         nodes = [start_node]
 
         for _ in range(max_iters):
@@ -149,15 +183,20 @@ class RRTNode(Node):
             nearest = self.get_nearest_node(nodes, rnd_point)
             direction = [rnd_point[i] - nearest.point[i] for i in range(3)]
             norm = math.sqrt(sum(d**2 for d in direction))
+
+            # Check if norm is zero to avoid division by zero
+            if norm == 0:
+                continue  # Skip this iteration
+
             direction = [d / norm for d in direction]
             new_point = [nearest.point[i] + step_size * direction[i] for i in range(3)]
 
             if self.is_collision_free(nearest.point, new_point, obstacles):
-                new_node = Node(new_point, nearest)
+                new_node = RRTTreeNode(new_point, nearest)
                 nodes.append(new_node)
 
                 if self.distance(new_point, goal) <= step_size and self.is_collision_free(new_point, goal, obstacles):
-                    goal_node = Node(goal, new_node)
+                    goal_node = RRTTreeNode(goal, new_node)
                     nodes.append(goal_node)
                     path = self.extract_path(goal_node)
                     end_time = time.perf_counter()
@@ -195,6 +234,50 @@ class RRTNode(Node):
             if (point[0] - ox)**2 + (point[1] - oy)**2 + (point[2] - oz)**2 <= r**2:
                 return True
         return False
+
+    def publish_goal_marker(self):
+        marker = Marker()
+        marker.header.frame_id = "base_link"  # Replace with your robot's base frame
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = "goal_marker"
+        marker.id = 0
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.pose.position.x = self.target_position[0]
+        marker.pose.position.y = self.target_position[1]
+        marker.pose.position.z = self.target_position[2]
+        marker.pose.orientation.x = 0.0
+        marker.pose.orientation.y = 0.0
+        marker.pose.orientation.z = 0.0
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = 0.1  # Adjust size as needed
+        marker.scale.y = 0.1
+        marker.scale.z = 0.1
+        marker.color.r = 1.0  # Red color
+        marker.color.g = 0.0
+        marker.color.b = 0.0
+        marker.color.a = 1.0  # Fully opaque
+
+        self.marker_publisher.publish(marker)
+
+    # Add a method to publish the path
+    def publish_path(self, path):
+        path_msg = Float32MultiArray()
+        # Flatten the path (list of points) into a single list
+        path_msg.data = [coord for point in path for coord in point]
+        self.path_publisher.publish(path_msg)
+        self.get_logger().info("Published path to /rrt_path")
+
+
+class RRTTreeNode:
+    def __init__(self, point, parent=None):
+        """
+        Represents a node in the RRT tree.
+        :param point: The 3D coordinates of the node.
+        :param parent: The parent node in the tree.
+        """
+        self.point = point
+        self.parent = parent
 
 
 def main(args=None):
