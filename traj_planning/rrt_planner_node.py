@@ -20,7 +20,7 @@ class RRTNode(Node):
         self.starting_position = [0.0, 0.0, 0.0]  # 3D starting position
 
         # Timer for planning
-        self.timer = self.create_timer(1.0 / 5.0, self.plan_path)  # 5Hz frequency
+        self.timer = self.create_timer(1.0 / 50.0, self.plan_path)  # 50Hz frequency
 
         # Subscribers to parameter topics
         self.create_subscription(
