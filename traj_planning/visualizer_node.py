@@ -8,7 +8,7 @@ from nav_msgs.msg import Path
 
 class LineVisualizerNode(Node):
     def __init__(self):
-        super().__init__('line_visualizer_node')
+        super().__init__('visualizer_node')
 
         # Initialize positions
         self.starting_position = [0.0, 0.0, 0.0]
@@ -61,31 +61,31 @@ class LineVisualizerNode(Node):
             10
         )
 
-        self.get_logger().info("✅ Line Visualizer Node Initialized")
+        self.get_logger().info("Line Visualizer Node Initialized")
 
     def starting_position_callback(self, msg: PoseStamped):
         self.starting_position = [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]
-        self.get_logger().info(f"Updated starting position: {self.starting_position}")
+        #self.get_logger().info(f"Updated starting position: {self.starting_position}")
         self.publish_markers()
 
     def target_position_callback(self, msg: Float32MultiArray):
         self.target_position = msg.data[:3]
-        self.get_logger().info(f"Updated target position: {self.target_position}")
+        #self.get_logger().info(f"Updated target position: {self.target_position}")
         self.publish_markers()
 
     def obstacle_center_callback(self, msg: Float32MultiArray):
         self.obstacle_center = msg.data[:3]
-        self.get_logger().info(f"Updated obstacle center: {self.obstacle_center}")
+        #self.get_logger().info(f"Updated obstacle center: {self.obstacle_center}")
         self.publish_markers()
 
     def obstacle_radius_callback(self, msg: Float32):
         self.obstacle_radius = msg.data
-        self.get_logger().info(f"Updated obstacle radius: {self.obstacle_radius}")
+        #self.get_logger().info(f"Updated obstacle radius: {self.obstacle_radius}")
         self.publish_markers()
 
     def path_callback(self, msg: Float32MultiArray):
         path = [msg.data[i:i+3] for i in range(0, len(msg.data), 3)]
-        self.get_logger().info(f"Received path with {len(path)} points.")
+        #self.get_logger().info(f"Received path with {len(path)} points.")
         self.publish_path_trajectory(path)
 
     def publish_markers(self):
