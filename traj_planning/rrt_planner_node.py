@@ -3,113 +3,90 @@ from rclpy.node import Node
 from std_msgs.msg import Float32, Float32MultiArray
 from geometry_msgs.msg import PoseStamped
 from visualization_msgs.msg import Marker
+from sensor_msgs.msg import Joy
 import random
 import math
 import time
-
 
 class RRTNode(Node):
     def __init__(self):
         super().__init__('rrt_planner')
 
-        # Initialize parameters with default values
         self.obstacle_center = [0.0, 0.0, 0.0]
         self.obstacle_radius = 0.0
-        self.workspace_radius = 1.0  # Default radius
-        self.target_position = [0.0, 0.0, 0.0]  # 3D target position
-        self.starting_position = [0.0, 0.0, 0.0]  # 3D starting position
+        self.workspace_radius = 1.0
+        self.target_position = [0.0, 0.0, 0.0]
+        self.starting_position = [0.0, 0.0, 0.0]
+        self.acs_reference_point = [0.0, 0.0, 0.0]
 
-        # Timer for planning
-        self.timer = self.create_timer(1.0 / 0.1, self.plan_path)  # 0.1Hz frequency
+        self.manual_replan_requested = False
+        self.last_button_state = 0
 
-        # Subscribers to parameter topics
-        self.create_subscription(
-            Float32MultiArray,
-            '/obstacle_center',
-            self.obstacle_center_callback,
-            10
-        )
-        self.create_subscription(
-            Float32,
-            '/obstacle_radius',
-            self.obstacle_radius_callback,
-            10
-        )
-        self.create_subscription(
-            Float32,
-            '/workspace_radius',
-            self.workspace_radius_callback,
-            10
-        )
-        self.create_subscription(
-            Float32MultiArray,
-            '/target_position',
-            self.target_position_callback,
-            10
-        )
-        self.create_subscription(
-            PoseStamped,
-            '/admittance_controller/pose_debug',
-            self.starting_position_callback,
-            10
-        )
+        self.timer = self.create_timer(1.0 / 50, self.plan_path)
 
-        # Publisher for visualizing the goal point in RViz
-        self.marker_publisher = self.create_publisher(
-            Marker,
-            '/visualization_marker',
-            10
-        )
+        self.create_subscription(Float32MultiArray, '/obstacle_center', self.obstacle_center_callback, 10)
+        self.create_subscription(Float32, '/obstacle_radius', self.obstacle_radius_callback, 10)
+        self.create_subscription(Float32, '/workspace_radius', self.workspace_radius_callback, 10)
+        self.create_subscription(Float32MultiArray, '/target_position', self.target_position_callback, 10)
+        self.create_subscription(PoseStamped, '/admittance_controller/pose_debug', self.starting_position_callback, 10)
+        self.create_subscription(Joy, '/joy', self.joy_callback, 10)
+        self.create_subscription(PoseStamped, '/ACS_reference_point', self.acs_reference_point_callback, 10)
 
-        # Publisher for the computed path
-        self.path_publisher = self.create_publisher(
-            Float32MultiArray,
-            '/rrt_path',
-            10
-        )
+        self.marker_publisher = self.create_publisher(Marker, '/visualization_marker', 10)
+        self.path_publisher = self.create_publisher(Float32MultiArray, '/rrt_path', 10)
 
-        # RRT parameters
         self.goal_sample_rate = 0.1
         self.step_size = 0.1
         self.max_iters = 5000
 
-        self.get_logger().info("RRT Planner Node Initialized")
+        self.get_logger().info("RRT Planner Node Initialized (Manual Mode Only)")
 
     def obstacle_center_callback(self, msg: Float32MultiArray):
         self.obstacle_center = msg.data
-        #self.get_logger().info(f"Updated obstacle_center: {self.obstacle_center}")
 
     def obstacle_radius_callback(self, msg: Float32):
         self.obstacle_radius = msg.data
-        #self.get_logger().info(f"Updated obstacle_radius: {self.obstacle_radius}")
 
     def workspace_radius_callback(self, msg: Float32):
         self.workspace_radius = msg.data
-        #self.get_logger().info(f"Updated workspace_radius: {self.workspace_radius}")
 
     def target_position_callback(self, msg: Float32MultiArray):
-        self.target_position = msg.data[:3]  # Extract x, y, z for 3D planning
-        #self.get_logger().info(f"Updated target_position: {self.target_position}")
-        #self.publish_goal_marker()  # Publish the goal marker
+        self.target_position = msg.data[:3]
 
     def starting_position_callback(self, msg: PoseStamped):
-        self.starting_position = [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]  # Extract x, y, z
-        #self.get_logger().info(f"Updated starting_position: {self.starting_position}")
+        self.starting_position = [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]
+
+    def acs_reference_point_callback(self, msg: PoseStamped):
+        self.acs_reference_point = [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]
+        distance_to_reference = self.distance(self.starting_position, self.acs_reference_point)
+        if distance_to_reference > 0.1:
+            self.get_logger().info(f"Distance to ACS reference point is {distance_to_reference:.2f}, triggering replanning.")
+            self.manual_replan_requested = True
+
+    def joy_callback(self, msg: Joy):
+        if len(msg.buttons) > 2:
+            current_button_state = msg.buttons[2]
+            if current_button_state == 1 and self.last_button_state == 0:
+                self.manual_replan_requested = True
+                self.get_logger().info("Manual replanning requested via Wii remote (button[2]).")
+            self.last_button_state = current_button_state
 
     def plan_path(self):
-        # Use the obstacle center and radius directly
+        if not self.manual_replan_requested:
+            return
+
+        self.manual_replan_requested = False  # Reset trigger
+
         if self.obstacle_radius > 0:
             obstacles = [(self.obstacle_center[0], self.obstacle_center[1], self.obstacle_center[2], self.obstacle_radius)]
         else:
             obstacles = []
 
-        # Check if the starting or target position is inside an obstacle
         if self.is_point_in_obstacle(self.starting_position, obstacles) or self.is_point_in_obstacle(self.target_position, obstacles):
             self.get_logger().info(f"Start or target position is inside an obstacle. Cannot plan path.")
             return
 
-        # Build the RRT path
-        start_time = time.perf_counter()  # Start timing
+        start_time = time.perf_counter()
         path, duration = self.build_rrt(
             self.starting_position,
             self.target_position,
@@ -119,38 +96,30 @@ class RRTNode(Node):
             self.step_size,
             self.max_iters
         )
-        end_time = time.perf_counter()  # End timing
+        end_time = time.perf_counter()
 
-        # Publish the path if found
         if path:
             self.publish_path(path)
-        # Log the execution time
         self.get_logger().info(f"RRT execution time: {end_time - start_time:.4f} seconds")
 
     def distance(self, p1, p2):
-        return math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+        return math.sqrt(sum((p2[i] - p1[i])**2 for i in range(3)))
 
     def line_circle_collision(self, p1, p2, circle):
-        cx, cy, cz, r = circle  # Unpack the 3D center and radius
-        dx = p2[0] - p1[0]
-        dy = p2[1] - p1[1]
-        dz = p2[2] - p1[2]
-        fx = p1[0] - cx
-        fy = p1[1] - cy
-        fz = p1[2] - cz
+        cx, cy, cz, r = circle
+        dx, dy, dz = [p2[i] - p1[i] for i in range(3)]
+        fx, fy, fz = [p1[i] - circle[i] for i in range(3)]
 
-        a = dx * dx + dy * dy + dz * dz
+        a = dx**2 + dy**2 + dz**2
         b = 2 * (fx * dx + fy * dy + fz * dz)
-        c = fx * fx + fy * fy + fz * fz - r * r
+        c = fx**2 + fy**2 + fz**2 - r**2
 
-        discriminant = b * b - 4 * a * c
+        discriminant = b**2 - 4 * a * c
         if discriminant < 0:
             return False
         discriminant = math.sqrt(discriminant)
-
         t1 = (-b - discriminant) / (2 * a)
         t2 = (-b + discriminant) / (2 * a)
-
         return (0 <= t1 <= 1) or (0 <= t2 <= 1)
 
     def is_collision_free(self, p1, p2, obstacles):
@@ -160,35 +129,25 @@ class RRTNode(Node):
         return min(nodes, key=lambda node: self.distance(node.point, point))
 
     def generate_random_point(self, radius):
-        # Generate a random point within a sphere of given radius (workspace limit) centered in [0, 0, 0]
         while True:
             x = random.uniform(-radius, radius)
             y = random.uniform(-radius, radius)
-            z = random.uniform(0, radius) # Limit Z to positive values (no points below the base)
+            z = random.uniform(0, radius)
             if x**2 + y**2 + z**2 <= radius**2:
                 return [x, y, z]
 
     def build_rrt(self, start, goal, obstacles, radius, goal_sample_rate, step_size=0.1, max_iters=5000):
         start_time = time.perf_counter()
-
-        # Use the custom RRTTreeNode class
         start_node = RRTTreeNode(start)
         nodes = [start_node]
 
         for _ in range(max_iters):
-            if random.random() < goal_sample_rate:
-                rnd_point = goal
-            else:
-                rnd_point = self.generate_random_point(radius)
-
+            rnd_point = goal if random.random() < goal_sample_rate else self.generate_random_point(radius)
             nearest = self.get_nearest_node(nodes, rnd_point)
             direction = [rnd_point[i] - nearest.point[i] for i in range(3)]
             norm = math.sqrt(sum(d**2 for d in direction))
-
-            # Check if norm is zero to avoid division by zero
             if norm == 0:
-                continue  # Skip this iteration
-
+                continue
             direction = [d / norm for d in direction]
             new_point = [nearest.point[i] + step_size * direction[i] for i in range(3)]
 
@@ -217,7 +176,6 @@ class RRTNode(Node):
     def smooth_path(self, path, obstacles):
         if not path or len(path) < 3:
             return path
-
         smoothed = [path[0]]
         i = 0
         while i < len(path) - 1:
@@ -236,10 +194,8 @@ class RRTNode(Node):
                 return True
         return False
 
-    # Method to publish the path
     def publish_path(self, path):
         path_msg = Float32MultiArray()
-        # Flatten the path (list of points) into a single list
         path_msg.data = [coord for point in path for coord in point]
         self.path_publisher.publish(path_msg)
         self.get_logger().info("Published path to /rrt_path")
@@ -247,11 +203,6 @@ class RRTNode(Node):
 
 class RRTTreeNode:
     def __init__(self, point, parent=None):
-        """
-        Represents a node in the RRT tree.
-        :param point: The 3D coordinates of the node.
-        :param parent: The parent node in the tree.
-        """
         self.point = point
         self.parent = parent
 

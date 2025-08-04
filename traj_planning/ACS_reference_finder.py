@@ -75,7 +75,7 @@ class PathMatcher(Node):
 
     def predicted_pose_callback(self, msg: PoseStamped):
         if not self.path_points:
-            self.get_logger().warn("No interpolated path available yet.")
+            # self.get_logger().warn("No interpolated path available yet.")
             return
 
         pred_pos = np.array([
