@@ -20,7 +20,7 @@ class RRTNode(Node):
         self.starting_position = [0.0, 0.0, 0.0]  # 3D starting position
 
         # Timer for planning
-        self.timer = self.create_timer(1.0 / 50.0, self.plan_path)  # 50Hz frequency
+        self.timer = self.create_timer(1.0 / 0.1, self.plan_path)  # 0.1Hz frequency
 
         # Subscribers to parameter topics
         self.create_subscription(
@@ -90,7 +90,7 @@ class RRTNode(Node):
     def target_position_callback(self, msg: Float32MultiArray):
         self.target_position = msg.data[:3]  # Extract x, y, z for 3D planning
         #self.get_logger().info(f"Updated target_position: {self.target_position}")
-        self.publish_goal_marker()  # Publish the goal marker
+        #self.publish_goal_marker()  # Publish the goal marker
 
     def starting_position_callback(self, msg: PoseStamped):
         self.starting_position = [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]  # Extract x, y, z
@@ -236,32 +236,7 @@ class RRTNode(Node):
                 return True
         return False
 
-    def publish_goal_marker(self):
-        marker = Marker()
-        marker.header.frame_id = "base_link"  # Replace with your robot's base frame
-        marker.header.stamp = self.get_clock().now().to_msg()
-        marker.ns = "goal_marker"
-        marker.id = 0
-        marker.type = Marker.SPHERE
-        marker.action = Marker.ADD
-        marker.pose.position.x = self.target_position[0]
-        marker.pose.position.y = self.target_position[1]
-        marker.pose.position.z = self.target_position[2]
-        marker.pose.orientation.x = 0.0
-        marker.pose.orientation.y = 0.0
-        marker.pose.orientation.z = 0.0
-        marker.pose.orientation.w = 1.0
-        marker.scale.x = 0.1  # Adjust size as needed
-        marker.scale.y = 0.1
-        marker.scale.z = 0.1
-        marker.color.r = 1.0  # Red color
-        marker.color.g = 0.0
-        marker.color.b = 0.0
-        marker.color.a = 1.0  # Fully opaque
-
-        self.marker_publisher.publish(marker)
-
-    # Add a method to publish the path
+    # Method to publish the path
     def publish_path(self, path):
         path_msg = Float32MultiArray()
         # Flatten the path (list of points) into a single list

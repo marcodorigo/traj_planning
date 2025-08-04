@@ -26,6 +26,8 @@ setup(
         'console_scripts': [
             'rrt_planner_node = traj_planning.rrt_planner_node:main',
             'visualizer_node = traj_planning.visualizer_node:main',
+            'HO_reference_finder = traj_planning.HO_reference_finder:main',
+            'ACS_reference_finder = traj_planning.ACS_reference_finder:main',
         ],
     },
 )

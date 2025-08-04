@@ -15,4 +15,16 @@ def generate_launch_description():
             name='visualizer_node',
             output='screen',
         ),
+        Node(
+            package='traj_planning',
+            executable='HO_reference_finder',
+            name='HO_reference_finder',
+            output='screen',
+        ),
+        Node(
+            package='traj_planning',
+            executable='ACS_reference_finder',
+            name='ACS_reference_finder',
+            output='screen',
+        ),
     ])
