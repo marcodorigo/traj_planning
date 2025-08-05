@@ -71,7 +71,7 @@ class PathMatcher(Node):
             interp_points.append(interp)
 
         self.path_points = interp_points
-        self.get_logger().info("Path interpolated to 100 points.")
+        # self.get_logger().info("Path interpolated to 100 points.")
 
     def predicted_pose_callback(self, msg: PoseStamped):
         if not self.path_points:
@@ -87,7 +87,13 @@ class PathMatcher(Node):
         # Compute distances to all interpolated points
         distances = np.linalg.norm(np.array(self.path_points) - pred_pos, axis=1)
         closest_idx = np.argmin(distances)
-        closest_point = self.path_points[closest_idx+10]
+
+        # Dynamically adjust the shift to avoid exceeding the path length
+        shift = 10
+        if closest_idx + shift >= len(self.path_points):
+            shift = len(self.path_points) - closest_idx - 1  # Adjust shift to stay within bounds
+
+        closest_point = self.path_points[closest_idx + shift]
 
         # Publish closest point
         closest_msg = PoseStamped()
@@ -98,7 +104,7 @@ class PathMatcher(Node):
         closest_msg.pose.orientation.w = 1.0  # neutral orientation
 
         self.closest_pub.publish(closest_msg)
-        self.get_logger().info(f"Closest point idx: {closest_idx}, dist: {distances[closest_idx]:.4f}")
+        # self.get_logger().info(f"Closest point idx: {closest_idx}, dist: {distances[closest_idx]:.4f}, shift: {shift}")
 
 def main(args=None):
     rclpy.init(args=args)

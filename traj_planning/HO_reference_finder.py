@@ -70,8 +70,8 @@ class AdmittancePredictor(Node):
 
         # Time step
         current_time = self.get_clock().now()
-        #dt = (current_time - self.last_time).nanoseconds * 1e-9
-        dt = 10  # Fixed time step for simplicity and debugging
+        dt = (current_time - self.last_time).nanoseconds * 1e-9
+        # dt = 10  # Fixed time step for simplicity and debugging
         if dt <= 0.0:
             return
 

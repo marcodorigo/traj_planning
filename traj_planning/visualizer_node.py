@@ -18,19 +18,28 @@ class LineVisualizerNode(Node):
         self.predicted_position = [0.0, 0.0, 0.0]
         self.closest_path_point = [0.0, 0.0, 0.0]
 
+        # Distances and safety coefficient
+        self.dist_to_obstacles = 0.0
+        self.dist_to_workspace = 0.0
+        self.dist_to_target = 0.0
+        self.safety_coefficient = 0.0
+
         # Subscribers
         self.create_subscription(PoseStamped, '/admittance_controller/pose_debug', self.starting_position_callback, 10)
         self.create_subscription(Float32MultiArray, '/target_position', self.target_position_callback, 10)
         self.create_subscription(Float32MultiArray, '/obstacle_center', self.obstacle_center_callback, 10)
         self.create_subscription(Float32, '/obstacle_radius', self.obstacle_radius_callback, 10)
         self.create_subscription(Float32MultiArray, '/rrt_path', self.path_callback, 10)
-
-        # NEW: Predicted position and closest point
         self.create_subscription(PoseStamped, '/predicted_pose', self.predicted_pose_callback, 10)
         self.create_subscription(PoseStamped, '/ACS_reference_point', self.closest_point_callback, 10)
 
+        # NEW: Subscribers for distances and safety coefficient
+        self.create_subscription(PoseStamped, '/distance_metrics', self.distance_metrics_callback, 10)
+        self.create_subscription(Float32, '/safety_coefficient', self.safety_coefficient_callback, 10)
+
         # Publishers
         self.marker_publisher = self.create_publisher(MarkerArray, '/visualization_marker_array', 10)
+        self.text_marker_publisher = self.create_publisher(MarkerArray, '/visualization_text_marker_array', 10)  # New topic
         self.path_publisher = self.create_publisher(Path, '/rrt_trajectory', 10)
 
         self.get_logger().info("Line Visualizer Node Initialized")
@@ -63,8 +72,19 @@ class LineVisualizerNode(Node):
         self.closest_path_point = [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]
         self.publish_markers()
 
+    def distance_metrics_callback(self, msg: PoseStamped):
+        self.dist_to_obstacles = msg.pose.position.x
+        self.dist_to_workspace = msg.pose.position.y
+        self.dist_to_target = msg.pose.position.z
+        self.publish_markers()
+
+    def safety_coefficient_callback(self, msg: Float32):
+        self.safety_coefficient = msg.data
+        self.publish_markers()
+
     def publish_markers(self):
         marker_array = MarkerArray()
+        text_marker_array = MarkerArray()  # Separate MarkerArray for text markers
         time_now = self.get_clock().now().to_msg()
 
         def make_sphere_marker(id, position, color_rgb, namespace):
@@ -85,22 +105,49 @@ class LineVisualizerNode(Node):
             marker.color.a = 1.0
             return marker
 
-        # Start, target, obstacle markers
-        # marker_array.markers.append(make_sphere_marker(0, self.starting_position, (0.0, 1.0, 0.0), "start_marker"))  # Green
-        marker_array.markers.append(make_sphere_marker(1, self.target_position, (1.0, 0.0, 0.0), "target_marker"))    # Red
+        def make_text_marker(id, text, position, namespace):
+            marker = Marker()
+            marker.header.frame_id = "base_link"
+            marker.header.stamp = time_now
+            marker.ns = namespace
+            marker.id = id
+            marker.type = Marker.TEXT_VIEW_FACING
+            marker.action = Marker.ADD
+            marker.pose.position.x = position[0]
+            marker.pose.position.y = position[1]
+            marker.pose.position.z = position[2]
+            marker.scale.z = 0.1  # Text size
+            marker.color.r = marker.color.g = marker.color.b = 1.0
+            marker.color.a = 1.0
+            marker.text = text
+            return marker
 
-        obstacle_marker = make_sphere_marker(2, self.obstacle_center, (0.0, 0.0, 1.0), "obstacle_marker")             # Blue
+        # Add sphere markers
+        marker_array.markers.append(make_sphere_marker(1, self.target_position, (1.0, 0.0, 0.0), "target_marker"))
+        obstacle_marker = make_sphere_marker(2, self.obstacle_center, (0.0, 0.0, 1.0), "obstacle_marker")
         obstacle_marker.scale.x = obstacle_marker.scale.y = obstacle_marker.scale.z = self.obstacle_radius * 2
-        obstacle_marker.color.a = 0.5  # Semi-transparent
+        obstacle_marker.color.a = 0.5
         marker_array.markers.append(obstacle_marker)
-
-        # NEW: Predicted position marker (Yellow)
         marker_array.markers.append(make_sphere_marker(3, self.predicted_position, (1.0, 1.0, 0.0), "predicted_marker"))
-
-        # NEW: Closest path point marker (Purple)
         marker_array.markers.append(make_sphere_marker(4, self.closest_path_point, (1.0, 0.0, 1.0), "closest_marker"))
 
+        # Add text markers to a separate array
+        text_marker_array.markers.append(make_text_marker(5, f"Dist_to_Obstacles: {self.dist_to_obstacles:.2f}",
+                                                          [0.5, 0.0, 1.0], "distance_text"))
+        text_marker_array.markers.append(make_text_marker(6, f"Dist_to_Workspace: {self.dist_to_workspace:.2f}",
+                                                          [0.5, 0.0, 0.9], "distance_text"))
+        text_marker_array.markers.append(make_text_marker(7, f"Dist_to_Target: {self.dist_to_target:.2f}",
+                                                          [0.5, 0.0, 0.8], "distance_text"))
+        text_marker_array.markers.append(make_text_marker(8, f"Safety_Coefficient: {self.safety_coefficient:.2f}",
+                                                          [0.5, 0.0, 0.7], "safety_text"))
+
+        # Debug logs
+        self.get_logger().info(f"Publishing {len(marker_array.markers)} sphere markers.")
+        self.get_logger().info(f"Publishing {len(text_marker_array.markers)} text markers.")
+
+        # Publish both marker arrays
         self.marker_publisher.publish(marker_array)
+        self.text_marker_publisher.publish(text_marker_array)
 
     def publish_path_trajectory(self, path):
         path_msg = Path()
