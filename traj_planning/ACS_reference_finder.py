@@ -89,7 +89,7 @@ class PathMatcher(Node):
         closest_idx = np.argmin(distances)
 
         # Dynamically adjust the shift to avoid exceeding the path length
-        shift = 10
+        shift = 20
         if closest_idx + shift >= len(self.path_points):
             shift = len(self.path_points) - closest_idx - 1  # Adjust shift to stay within bounds
 

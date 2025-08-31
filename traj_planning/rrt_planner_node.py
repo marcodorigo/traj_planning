@@ -59,7 +59,7 @@ class RRTNode(Node):
     def acs_reference_point_callback(self, msg: PoseStamped):
         self.acs_reference_point = [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]
         distance_to_reference = self.distance(self.starting_position, self.acs_reference_point)
-        if distance_to_reference > 0.1:
+        if distance_to_reference > 0.15:
             self.get_logger().info(f"Distance to ACS reference point is {distance_to_reference:.2f}, triggering replanning.")
             self.manual_replan_requested = True
 
