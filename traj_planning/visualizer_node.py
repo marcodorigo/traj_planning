@@ -1,6 +1,6 @@
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float32, Float32MultiArray
+from std_msgs.msg import Float32, Float32MultiArray, Int32  # Update the import to include Int32
 from geometry_msgs.msg import PoseStamped
 from visualization_msgs.msg import Marker, MarkerArray
 from nav_msgs.msg import Path
@@ -18,11 +18,12 @@ class LineVisualizerNode(Node):
         self.predicted_position = [0.0, 0.0, 0.0]
         self.closest_path_point = [0.0, 0.0, 0.0]
 
-        # Distances and safety coefficient
+        # Distances, safety coefficient, and decision
         self.dist_to_obstacles = 0.0
         self.dist_to_workspace = 0.0
         self.dist_to_target = 0.0
         self.safety_coefficient = 0.0
+        self.selected_game = "Unknown"  # Default value for the selected game
 
         # Subscribers
         self.create_subscription(PoseStamped, '/admittance_controller/pose_debug', self.starting_position_callback, 10)
@@ -33,9 +34,10 @@ class LineVisualizerNode(Node):
         self.create_subscription(PoseStamped, '/predicted_pose', self.predicted_pose_callback, 10)
         self.create_subscription(PoseStamped, '/ACS_reference_point', self.closest_point_callback, 10)
 
-        # NEW: Subscribers for distances and safety coefficient
+        # NEW: Subscribers for distances, safety coefficient, and decision
         self.create_subscription(PoseStamped, '/distance_metrics', self.distance_metrics_callback, 10)
         self.create_subscription(Float32, '/safety_coefficient', self.safety_coefficient_callback, 10)
+        self.create_subscription(Int32, '/differential_gt/decision', self.decision_callback, 10)  # Update the subscriber to use Int32
 
         # Publishers
         self.marker_publisher = self.create_publisher(MarkerArray, '/visualization_marker_array', 10)
@@ -80,6 +82,16 @@ class LineVisualizerNode(Node):
 
     def safety_coefficient_callback(self, msg: Float32):
         self.safety_coefficient = msg.data
+        self.publish_markers()
+
+    def decision_callback(self, msg: Int32):
+        # Update the selected game based on the decision value
+        if msg.data == 1:
+            self.selected_game = "NonCoop"
+        elif msg.data == 0:
+            self.selected_game = "Coop"
+        else:
+            self.selected_game = "Unknown"
         self.publish_markers()
 
     def publish_markers(self):
@@ -140,6 +152,8 @@ class LineVisualizerNode(Node):
                                                           [0.5, 0.0, 0.8], "distance_text"))
         text_marker_array.markers.append(make_text_marker(8, f"Safety_Coefficient: {self.safety_coefficient:.2f}",
                                                           [0.5, 0.0, 0.7], "safety_text"))
+        text_marker_array.markers.append(make_text_marker(9, f"Selected_Game: {self.selected_game}",
+                                                          [0.5, 0.0, 0.6], "game_text"))  # New text marker
 
         # Debug logs
         self.get_logger().info(f"Publishing {len(marker_array.markers)} sphere markers.")
