@@ -44,7 +44,7 @@ class LineVisualizerNode(Node):
         self.text_marker_publisher = self.create_publisher(MarkerArray, '/visualization_text_marker_array', 10)  # New topic
         self.path_publisher = self.create_publisher(Path, '/rrt_trajectory', 10)
 
-        self.get_logger().info("Line Visualizer Node Initialized")
+        # self.get_logger().info("Line Visualizer Node Initialized")
 
     def starting_position_callback(self, msg: PoseStamped):
         self.starting_position = [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]
@@ -156,8 +156,8 @@ class LineVisualizerNode(Node):
                                                           [0.5, 0.0, 0.6], "game_text"))  # New text marker
 
         # Debug logs
-        self.get_logger().info(f"Publishing {len(marker_array.markers)} sphere markers.")
-        self.get_logger().info(f"Publishing {len(text_marker_array.markers)} text markers.")
+        # self.get_logger().info(f"Publishing {len(marker_array.markers)} sphere markers.")
+        # self.get_logger().info(f"Publishing {len(text_marker_array.markers)} text markers.")
 
         # Publish both marker arrays
         self.marker_publisher.publish(marker_array)

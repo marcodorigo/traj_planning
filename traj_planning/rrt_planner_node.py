@@ -19,28 +19,29 @@ class RRTNode(Node):
         self.starting_position = [0.0, 0.0, 0.0]
         self.acs_reference_point = [0.0, 0.0, 0.0]
 
-        self.manual_replan_requested = False
+        self.replan_requested = False
         self.last_button_state = 0
 
-        self.timer = self.create_timer(1.0 / 50, self.plan_path)
+        self.timer = self.create_timer(1.0 / 25, self.plan_path)
 
         self.create_subscription(Float32MultiArray, '/obstacle_center', self.obstacle_center_callback, 10)
         self.create_subscription(Float32, '/obstacle_radius', self.obstacle_radius_callback, 10)
         self.create_subscription(Float32, '/workspace_radius', self.workspace_radius_callback, 10)
         self.create_subscription(Float32MultiArray, '/target_position', self.target_position_callback, 10)
         self.create_subscription(PoseStamped, '/admittance_controller/pose_debug', self.starting_position_callback, 10)
-        self.create_subscription(Joy, '/joy', self.joy_callback, 10)
+        self.create_subscription(Joy, '/joy', self.joy_callback, 10) #TODO: handle this directly in joy_to_wrench
         self.create_subscription(PoseStamped, '/ACS_reference_point', self.acs_reference_point_callback, 10)
 
         self.marker_publisher = self.create_publisher(Marker, '/visualization_marker', 10)
-        self.path_publisher = self.create_publisher(Float32MultiArray, '/rrt_path', 10)
+        self.path_publisher = self.create_publisher(Float32MultiArray, '/rrt_path', 10) #TODO: clear up rrt_path & rrt_trajectory confusion (visualizer node publishes on trajectory)
 
         self.goal_sample_rate = 0.1
         self.step_size = 0.1
         self.max_iters = 5000
 
-        self.get_logger().info("RRT Planner Node Initialized (Manual Mode Only)")
+        self.distance_threshold = 0.05  # meters
 
+    # Callback functions
     def obstacle_center_callback(self, msg: Float32MultiArray):
         self.obstacle_center = msg.data
 
@@ -59,23 +60,28 @@ class RRTNode(Node):
     def acs_reference_point_callback(self, msg: PoseStamped):
         self.acs_reference_point = [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]
         distance_to_reference = self.distance(self.starting_position, self.acs_reference_point)
-        if distance_to_reference > 0.15:
+
+        # Request replan if the distance to the ACS reference point exceeds the threshold
+        if distance_to_reference > self.distance_threshold:
             self.get_logger().info(f"Distance to ACS reference point is {distance_to_reference:.2f}, triggering replanning.")
-            self.manual_replan_requested = True
+            self.replan_requested = True
 
     def joy_callback(self, msg: Joy):
         if len(msg.buttons) > 2:
-            current_button_state = msg.buttons[2]
+            current_button_state = msg.buttons[2] # Home button on wii remote
+
+            # Request replanning on button press
             if current_button_state == 1 and self.last_button_state == 0:
-                self.manual_replan_requested = True
-                self.get_logger().info("Manual replanning requested via Wii remote (button[2]).")
+                self.replan_requested = True
+                # self.get_logger().info("Manual replanning requested.")
             self.last_button_state = current_button_state
 
+    # RRT Algorithm and Path Planning
     def plan_path(self):
-        if not self.manual_replan_requested:
+        if not self.replan_requested:
             return
 
-        self.manual_replan_requested = False  # Reset trigger
+        self.replan_requested = False  # Reset trigger
 
         if self.obstacle_radius > 0:
             obstacles = [(self.obstacle_center[0], self.obstacle_center[1], self.obstacle_center[2], self.obstacle_radius)]
@@ -83,10 +89,10 @@ class RRTNode(Node):
             obstacles = []
 
         if self.is_point_in_obstacle(self.starting_position, obstacles) or self.is_point_in_obstacle(self.target_position, obstacles):
-            self.get_logger().info(f"Start or target position is inside an obstacle. Cannot plan path.")
+            # self.get_logger().info(f"Start or target position is inside an obstacle. Cannot plan path.")
             return
 
-        start_time = time.perf_counter()
+        start_time = time.perf_counter() #TODO: remove (debug)
         path, duration = self.build_rrt(
             self.starting_position,
             self.target_position,
@@ -96,11 +102,11 @@ class RRTNode(Node):
             self.step_size,
             self.max_iters
         )
-        end_time = time.perf_counter()
+        end_time = time.perf_counter() #TODO: remove (debug)
 
         if path:
             self.publish_path(path)
-        self.get_logger().info(f"RRT execution time: {end_time - start_time:.4f} seconds")
+        # self.get_logger().info(f"RRT execution time: {end_time - start_time:.4f} seconds") #TODO: remove (debug)
 
     def distance(self, p1, p2):
         return math.sqrt(sum((p2[i] - p1[i])**2 for i in range(3)))
@@ -162,7 +168,7 @@ class RRTNode(Node):
                     end_time = time.perf_counter()
                     return self.smooth_path(path, obstacles), end_time - start_time
 
-        self.get_logger().warn("Max iterations reached.")
+        # self.get_logger().warn("Max iterations reached.")
         end_time = time.perf_counter()
         return None, end_time - start_time
 
@@ -198,7 +204,7 @@ class RRTNode(Node):
         path_msg = Float32MultiArray()
         path_msg.data = [coord for point in path for coord in point]
         self.path_publisher.publish(path_msg)
-        self.get_logger().info("Published path to /rrt_path")
+        # self.get_logger().info("Published path to /rrt_path")
 
 
 class RRTTreeNode:
