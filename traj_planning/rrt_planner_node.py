@@ -29,8 +29,10 @@ class RRTNode(Node):
         self.create_subscription(Float32, '/workspace_radius', self.workspace_radius_callback, 10)
         self.create_subscription(Float32MultiArray, '/target_position', self.target_position_callback, 10)
         self.create_subscription(PoseStamped, '/admittance_controller/pose_debug', self.starting_position_callback, 10)
-        self.create_subscription(Joy, '/joy', self.joy_callback, 10) #TODO: handle this directly in joy_to_wrench
+        # self.create_subscription(Joy, '/falcon0/buttons', self.joy_callback, 10) # Use this for falcon joystick
+        self.create_subscription(Joy, '/joy', self.joy_callback, 10)
         self.create_subscription(PoseStamped, '/ACS_reference_point', self.acs_reference_point_callback, 10)
+        
 
         self.marker_publisher = self.create_publisher(Marker, '/visualization_marker', 10)
         self.path_publisher = self.create_publisher(Float32MultiArray, '/rrt_path', 10) #TODO: clear up rrt_path & rrt_trajectory confusion (visualizer node publishes on trajectory)
@@ -84,7 +86,7 @@ class RRTNode(Node):
         self.replan_requested = False  # Reset trigger
 
         if self.obstacle_radius > 0:
-            obstacles = [(self.obstacle_center[0], self.obstacle_center[1], self.obstacle_center[2], self.obstacle_radius)]
+            obstacles = [(self.obstacle_center[0], self.obstacle_center[1], self.obstacle_center[2], self.obstacle_radius+0.05)] # Add small buffer to obstacle radius
         else:
             obstacles = []
 

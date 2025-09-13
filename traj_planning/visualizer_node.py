@@ -25,6 +25,9 @@ class LineVisualizerNode(Node):
         self.safety_coefficient = 0.0
         self.selected_game = "Unknown"  # Default value for the selected game
 
+        # Manipulability metric
+        self.manipulability = 0.0
+
         # Subscribers
         self.create_subscription(PoseStamped, '/admittance_controller/pose_debug', self.starting_position_callback, 10)
         self.create_subscription(Float32MultiArray, '/target_position', self.target_position_callback, 10)
@@ -38,6 +41,9 @@ class LineVisualizerNode(Node):
         self.create_subscription(PoseStamped, '/distance_metrics', self.distance_metrics_callback, 10)
         self.create_subscription(Float32, '/safety_coefficient', self.safety_coefficient_callback, 10)
         self.create_subscription(Int32, '/differential_gt/decision', self.decision_callback, 10)  # Update the subscriber to use Int32
+
+        # NEW: Subscriber for manipulability metric
+        self.create_subscription(Float32, '/manipulability_metric', self.manipulability_callback, 10)
 
         # Publishers
         self.marker_publisher = self.create_publisher(MarkerArray, '/visualization_marker_array', 10)
@@ -94,6 +100,11 @@ class LineVisualizerNode(Node):
             self.selected_game = "Unknown"
         self.publish_markers()
 
+    # NEW: Callback for manipulability metric
+    def manipulability_callback(self, msg: Float32):
+        self.manipulability = msg.data
+        self.publish_markers()
+
     def publish_markers(self):
         marker_array = MarkerArray()
         text_marker_array = MarkerArray()  # Separate MarkerArray for text markers
@@ -136,28 +147,31 @@ class LineVisualizerNode(Node):
 
         # Add sphere markers
         marker_array.markers.append(make_sphere_marker(1, self.target_position, (1.0, 0.0, 0.0), "target_marker"))
-        obstacle_marker = make_sphere_marker(2, self.obstacle_center, (0.0, 0.0, 1.0), "obstacle_marker")
+        
+        # Obstacle marker with conditional color
+        obstacle_color = (1.0, 0.0, 0.0) if self.dist_to_obstacles == 0 else (0.0, 0.0, 1.0)
+        obstacle_marker = make_sphere_marker(2, self.obstacle_center, obstacle_color, "obstacle_marker")
         obstacle_marker.scale.x = obstacle_marker.scale.y = obstacle_marker.scale.z = self.obstacle_radius * 2
         obstacle_marker.color.a = 0.5
         marker_array.markers.append(obstacle_marker)
+        
         marker_array.markers.append(make_sphere_marker(3, self.predicted_position, (1.0, 1.0, 0.0), "predicted_marker"))
         marker_array.markers.append(make_sphere_marker(4, self.closest_path_point, (1.0, 0.0, 1.0), "closest_marker"))
 
         # Add text markers to a separate array
         text_marker_array.markers.append(make_text_marker(5, f"Dist_to_Obstacles: {self.dist_to_obstacles:.2f}",
-                                                          [0.5, 0.0, 1.0], "distance_text"))
+                                                          [0.5, -0.5, 1.0], "distance_text"))
         text_marker_array.markers.append(make_text_marker(6, f"Dist_to_Workspace: {self.dist_to_workspace:.2f}",
-                                                          [0.5, 0.0, 0.9], "distance_text"))
+                                                          [0.5, -0.5, 0.9], "distance_text"))
         text_marker_array.markers.append(make_text_marker(7, f"Dist_to_Target: {self.dist_to_target:.2f}",
-                                                          [0.5, 0.0, 0.8], "distance_text"))
-        text_marker_array.markers.append(make_text_marker(8, f"Safety_Coefficient: {self.safety_coefficient:.2f}",
-                                                          [0.5, 0.0, 0.7], "safety_text"))
-        text_marker_array.markers.append(make_text_marker(9, f"Selected_Game: {self.selected_game}",
-                                                          [0.5, 0.0, 0.6], "game_text"))  # New text marker
-
-        # Debug logs
-        # self.get_logger().info(f"Publishing {len(marker_array.markers)} sphere markers.")
-        # self.get_logger().info(f"Publishing {len(text_marker_array.markers)} text markers.")
+                                                          [0.5, -0.5, 0.8], "distance_text"))
+        # NEW: Add manipulability text marker
+        text_marker_array.markers.append(make_text_marker(8, f"Manipulability: {self.manipulability:.2f}",
+                                                          [0.5, -0.5, 0.7], "manipulability_text"))
+        text_marker_array.markers.append(make_text_marker(9, f"Safety_Coefficient: {self.safety_coefficient:.2f}",
+                                                          [0.5, -0.5, 0.6], "safety_text"))
+        text_marker_array.markers.append(make_text_marker(10, f"Selected_Game: {self.selected_game}",
+                                                           [0.5, -0.5, 0.5], "game_text"))  # Updated IDs
 
         # Publish both marker arrays
         self.marker_publisher.publish(marker_array)
