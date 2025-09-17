@@ -155,8 +155,8 @@ class LineVisualizerNode(Node):
         obstacle_marker.color.a = 0.5
         marker_array.markers.append(obstacle_marker)
         
-        marker_array.markers.append(make_sphere_marker(3, self.predicted_position, (1.0, 1.0, 0.0), "predicted_marker"))
-        marker_array.markers.append(make_sphere_marker(4, self.closest_path_point, (1.0, 0.0, 1.0), "closest_marker"))
+        # marker_array.markers.append(make_sphere_marker(3, self.predicted_position, (1.0, 1.0, 0.0), "predicted_marker"))
+        # marker_array.markers.append(make_sphere_marker(4, self.closest_path_point, (1.0, 0.0, 1.0), "closest_marker"))
 
         # Add text markers to a separate array
         text_marker_array.markers.append(make_text_marker(5, f"Dist_to_Obstacles: {self.dist_to_obstacles:.2f}",

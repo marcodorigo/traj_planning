@@ -29,8 +29,8 @@ class RRTNode(Node):
         self.create_subscription(Float32, '/workspace_radius', self.workspace_radius_callback, 10)
         self.create_subscription(Float32MultiArray, '/target_position', self.target_position_callback, 10)
         self.create_subscription(PoseStamped, '/admittance_controller/pose_debug', self.starting_position_callback, 10)
-        # self.create_subscription(Joy, '/falcon0/buttons', self.joy_callback, 10) # Use this for falcon joystick
-        self.create_subscription(Joy, '/joy', self.joy_callback, 10)
+        self.create_subscription(Joy, '/falcon0/buttons', self.joy_callback, 10) # Use this for falcon joystick
+        # self.create_subscription(Joy, '/joy', self.joy_callback, 10)
         self.create_subscription(PoseStamped, '/ACS_reference_point', self.acs_reference_point_callback, 10)
         
 
@@ -70,7 +70,8 @@ class RRTNode(Node):
 
     def joy_callback(self, msg: Joy):
         if len(msg.buttons) > 2:
-            current_button_state = msg.buttons[2] # Home button on wii remote
+            # current_button_state = msg.buttons[2] # Home button on wii remote
+            current_button_state = msg.buttons[1] # arrow button on falcon
 
             # Request replanning on button press
             if current_button_state == 1 and self.last_button_state == 0:
