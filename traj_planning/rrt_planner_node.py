@@ -12,6 +12,10 @@ class RRTNode(Node):
     def __init__(self):
         super().__init__('rrt_planner')
 
+        # Declare and get the "use_wii_controller" parameter
+        self.declare_parameter('use_wii_controller', False)
+        self.use_wii_controller = self.get_parameter('use_wii_controller').get_parameter_value().bool_value
+
         self.obstacle_center = [0.0, 0.0, 0.0]
         self.obstacle_radius = 0.0
         self.workspace_radius = 1.0
@@ -32,7 +36,12 @@ class RRTNode(Node):
         self.create_subscription(Joy, '/falcon0/buttons', self.joy_callback, 10) # Use this for falcon joystick
         # self.create_subscription(Joy, '/joy', self.joy_callback, 10)
         self.create_subscription(PoseStamped, '/ACS_reference_point', self.acs_reference_point_callback, 10)
-        
+
+        # Subscribe to the appropriate topic based on the parameter
+        if self.use_wii_controller:
+            self.create_subscription(Joy, '/joy', self.joy_callback, 10)
+        else:
+            self.create_subscription(Joy, '/falcon0/buttons', self.joy_callback, 10)
 
         self.marker_publisher = self.create_publisher(Marker, '/visualization_marker', 10)
         self.path_publisher = self.create_publisher(Float32MultiArray, '/rrt_path', 10) #TODO: clear up rrt_path & rrt_trajectory confusion (visualizer node publishes on trajectory)
@@ -42,6 +51,16 @@ class RRTNode(Node):
         self.max_iters = 5000
 
         self.distance_threshold = 0.05  # meters
+
+        # Delay the first replan request by 5 seconds
+        self.initial_replan_timer = self.create_timer(5.0, self.trigger_initial_replan)
+
+    def trigger_initial_replan(self):
+        self.replan_requested = True
+        self.get_logger().info("Initial replan triggered.")
+        
+        # Cancel the timer after the first replan
+        self.initial_replan_timer.cancel()
 
     # Callback functions
     def obstacle_center_callback(self, msg: Float32MultiArray):
@@ -70,13 +89,12 @@ class RRTNode(Node):
 
     def joy_callback(self, msg: Joy):
         if len(msg.buttons) > 2:
-            # current_button_state = msg.buttons[2] # Home button on wii remote
-            current_button_state = msg.buttons[1] # arrow button on falcon
+            # Use button index based on the parameter
+            current_button_state = msg.buttons[2] if self.use_wii_controller else msg.buttons[1]
 
             # Request replanning on button press
             if current_button_state == 1 and self.last_button_state == 0:
                 self.replan_requested = True
-                # self.get_logger().info("Manual replanning requested.")
             self.last_button_state = current_button_state
 
     # RRT Algorithm and Path Planning
@@ -109,6 +127,9 @@ class RRTNode(Node):
 
         if path:
             self.publish_path(path)
+            # Debug notification after the first replan
+            self.get_logger().info("Trajectory planned successfully after initialization.")
+
         # self.get_logger().info(f"RRT execution time: {end_time - start_time:.4f} seconds") #TODO: remove (debug)
 
     def distance(self, p1, p2):
