@@ -12,26 +12,12 @@ class PathMatcher(Node):
         super().__init__('path_matcher_node')
 
         # Subscribers
-        self.pred_pose_sub = self.create_subscription(
-            PoseStamped,
-            '/predicted_pose',
-            self.predicted_pose_callback,
-            10
-        )
+        self.pred_pose_sub = self.create_subscription(PoseStamped, '/predicted_pose', self.predicted_pose_callback, 10)
 
-        self.path_sub = self.create_subscription(
-            Path,
-            '/rrt_trajectory',
-            self.path_callback,
-            10
-        )
+        self.path_sub = self.create_subscription(Path, '/rrt_trajectory', self.path_callback, 10)
 
-        # Publisher for closest point (for debug)
-        self.closest_pub = self.create_publisher(
-            PoseStamped,
-            '/ACS_reference_point',
-            10
-        )
+        # Publishers
+        self.closest_pub = self.create_publisher(PoseStamped, '/ACS_reference_point', 10)
 
         self.path_points = []  # Interpolated 100 points
 
@@ -75,7 +61,7 @@ class PathMatcher(Node):
 
     def predicted_pose_callback(self, msg: PoseStamped):
         if not self.path_points:
-            # self.get_logger().warn("No interpolated path available yet.")
+            self.get_logger().warn("No interpolated path available yet.")
             return
 
         pred_pos = np.array([
@@ -95,7 +81,7 @@ class PathMatcher(Node):
 
         closest_point = self.path_points[closest_idx + shift]
 
-        # Publish closest point
+        # Publish reference point
         closest_msg = PoseStamped()
         closest_msg.header = msg.header
         closest_msg.pose.position.x = closest_point[0]

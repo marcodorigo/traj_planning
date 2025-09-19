@@ -51,9 +51,10 @@ class RRTNode(Node):
         self.max_iters = 5000
 
         self.distance_threshold = 0.05  # meters
+        self.buffer = 0.01              # meters
 
-        # Delay the first replan request by 5 seconds
-        self.initial_replan_timer = self.create_timer(5.0, self.trigger_initial_replan)
+        # Delay the first replan request by 2 seconds to ensure other nodes are active
+        self.initial_replan_timer = self.create_timer(2.0, self.trigger_initial_replan)
 
     def trigger_initial_replan(self):
         self.replan_requested = True
@@ -105,7 +106,7 @@ class RRTNode(Node):
         self.replan_requested = False  # Reset trigger
 
         if self.obstacle_radius > 0:
-            obstacles = [(self.obstacle_center[0], self.obstacle_center[1], self.obstacle_center[2], self.obstacle_radius+0.05)] # Add small buffer to obstacle radius
+            obstacles = [(self.obstacle_center[0], self.obstacle_center[1], self.obstacle_center[2], self.obstacle_radius + self.buffer)] # Add small buffer to obstacle radius
         else:
             obstacles = []
 
@@ -113,7 +114,6 @@ class RRTNode(Node):
             # self.get_logger().info(f"Start or target position is inside an obstacle. Cannot plan path.")
             return
 
-        start_time = time.perf_counter() #TODO: remove (debug)
         path, duration = self.build_rrt(
             self.starting_position,
             self.target_position,
@@ -123,14 +123,9 @@ class RRTNode(Node):
             self.step_size,
             self.max_iters
         )
-        end_time = time.perf_counter() #TODO: remove (debug)
 
         if path:
             self.publish_path(path)
-            # Debug notification after the first replan
-            self.get_logger().info("Trajectory planned successfully after initialization.")
-
-        # self.get_logger().info(f"RRT execution time: {end_time - start_time:.4f} seconds") #TODO: remove (debug)
 
     def distance(self, p1, p2):
         return math.sqrt(sum((p2[i] - p1[i])**2 for i in range(3)))
@@ -192,7 +187,6 @@ class RRTNode(Node):
                     end_time = time.perf_counter()
                     return self.smooth_path(path, obstacles), end_time - start_time
 
-        # self.get_logger().warn("Max iterations reached.")
         end_time = time.perf_counter()
         return None, end_time - start_time
 
@@ -228,14 +222,11 @@ class RRTNode(Node):
         path_msg = Float32MultiArray()
         path_msg.data = [coord for point in path for coord in point]
         self.path_publisher.publish(path_msg)
-        # self.get_logger().info("Published path to /rrt_path")
-
 
 class RRTTreeNode:
     def __init__(self, point, parent=None):
         self.point = point
         self.parent = parent
-
 
 def main(args=None):
     rclpy.init(args=args)
