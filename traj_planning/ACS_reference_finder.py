@@ -11,15 +11,20 @@ class PathMatcher(Node):
     def __init__(self):
         super().__init__('path_matcher_node')
 
+        self.publish_rate = 500.0  # Hz
+        self.timer = self.create_timer(1.0 / self.publish_rate, self.publish_closest_point)
+        self.latest_pred_pose = None
+        self.latest_reference_point = None  # Store the latest reference point
+
         # Subscribers
         self.pred_pose_sub = self.create_subscription(PoseStamped, '/predicted_pose', self.predicted_pose_callback, 10)
-
         self.path_sub = self.create_subscription(Path, '/rrt_trajectory', self.path_callback, 10)
 
         # Publishers
         self.closest_pub = self.create_publisher(PoseStamped, '/ACS_reference_point', 10)
 
-        self.path_points = []  # Interpolated 100 points
+        self.path_points = []  # Interpolated points
+        self.smoothing_factor = 100  # Increase for finer interpolation
 
     def path_callback(self, msg: Path):
         poses = msg.poses
@@ -43,9 +48,9 @@ class PathMatcher(Node):
             self.get_logger().warn("RRT path total length is zero.")
             return
 
-        # Resample to 100 points
+        # Resample to 1000 points
         interp_points = []
-        target_dists = np.linspace(0, total_dist, 100)
+        target_dists = np.linspace(0, total_dist, 100*self.smoothing_factor)
         for t in target_dists:
             idx = np.searchsorted(cum_dist, t) - 1
             idx = np.clip(idx, 0, len(path_xyz) - 2)
@@ -57,9 +62,11 @@ class PathMatcher(Node):
             interp_points.append(interp)
 
         self.path_points = interp_points
-        # self.get_logger().info("Path interpolated to 100 points.")
+        # self.get_logger().info("Path interpolated to 1000 points.")
 
     def predicted_pose_callback(self, msg: PoseStamped):
+        self.latest_pred_pose = msg
+        
         if not self.path_points:
             self.get_logger().warn("No interpolated path available yet.")
             return
@@ -75,22 +82,24 @@ class PathMatcher(Node):
         closest_idx = np.argmin(distances)
 
         # Dynamically adjust the shift to avoid exceeding the path length
-        shift = 5
+        shift = 5*self.smoothing_factor
         if closest_idx + shift >= len(self.path_points):
             shift = len(self.path_points) - closest_idx - 1  # Adjust shift to stay within bounds
 
         closest_point = self.path_points[closest_idx + shift]
 
-        # Publish reference point
-        closest_msg = PoseStamped()
-        closest_msg.header = msg.header
-        closest_msg.pose.position.x = closest_point[0]
-        closest_msg.pose.position.y = closest_point[1]
-        closest_msg.pose.position.z = closest_point[2]
-        closest_msg.pose.orientation.w = 1.0  # neutral orientation
+        # Store the latest reference point
+        self.latest_reference_point = PoseStamped()
+        self.latest_reference_point.header = msg.header
+        self.latest_reference_point.pose.position.x = closest_point[0]
+        self.latest_reference_point.pose.position.y = closest_point[1]
+        self.latest_reference_point.pose.position.z = closest_point[2]
+        self.latest_reference_point.pose.orientation.w = 1.0  # neutral orientation
 
-        self.closest_pub.publish(closest_msg)
-        # self.get_logger().info(f"Closest point idx: {closest_idx}, dist: {distances[closest_idx]:.4f}, shift: {shift}")
+    def publish_closest_point(self):
+        # Publish the latest reference point at a fixed rate
+        if self.latest_reference_point is not None:
+            self.closest_pub.publish(self.latest_reference_point)
 
 def main(args=None):
     rclpy.init(args=args)

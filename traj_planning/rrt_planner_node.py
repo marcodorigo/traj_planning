@@ -1,9 +1,10 @@
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32, Float32MultiArray
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, WrenchStamped
 from visualization_msgs.msg import Marker
 from sensor_msgs.msg import Joy
+from std_msgs.msg import Int32
 import random
 import math
 import time
@@ -12,9 +13,11 @@ class RRTNode(Node):
     def __init__(self):
         super().__init__('rrt_planner')
 
-        # Declare and get the "use_wii_controller" parameter
+        # Declare and get the "use_wii_controller" and "test" parameters
         self.declare_parameter('use_wii_controller', False)
+        self.declare_parameter('test', True)
         self.use_wii_controller = self.get_parameter('use_wii_controller').get_parameter_value().bool_value
+        self.test_mode = self.get_parameter('test').get_parameter_value().bool_value
 
         self.obstacle_center = [0.0, 0.0, 0.0]
         self.obstacle_radius = 0.0
@@ -26,6 +29,15 @@ class RRTNode(Node):
         self.replan_requested = False
         self.last_button_state = 0
 
+        # Variables for the new replanning condition
+        self.non_cooperative = False
+        self.ho_force = 0.0
+        self.force_timer_start = None
+        self.force_threshold_exceeded = False
+        self.timer_duration = 1.0  # seconds
+        self.ho_upper_bound = 7.0
+        self.ho_lower_bound = 2.0
+
         self.timer = self.create_timer(1.0 / 25, self.plan_path)
 
         self.create_subscription(Float32MultiArray, '/obstacle_center', self.obstacle_center_callback, 10)
@@ -33,9 +45,9 @@ class RRTNode(Node):
         self.create_subscription(Float32, '/workspace_radius', self.workspace_radius_callback, 10)
         self.create_subscription(Float32MultiArray, '/target_position', self.target_position_callback, 10)
         self.create_subscription(PoseStamped, '/admittance_controller/pose_debug', self.starting_position_callback, 10)
-        self.create_subscription(Joy, '/falcon0/buttons', self.joy_callback, 10) # Use this for falcon joystick
-        # self.create_subscription(Joy, '/joy', self.joy_callback, 10)
         self.create_subscription(PoseStamped, '/ACS_reference_point', self.acs_reference_point_callback, 10)
+        self.create_subscription(Int32, '/differential_gt/decision', self.decision_callback, 10)
+        self.create_subscription(WrenchStamped, '/differential_gt/wrench_from_ho', self.wrench_callback, 10)
 
         # Subscribe to the appropriate topic based on the parameter
         if self.use_wii_controller:
@@ -56,12 +68,50 @@ class RRTNode(Node):
         # Delay the first replan request by 2 seconds to ensure other nodes are active
         self.initial_replan_timer = self.create_timer(2.0, self.trigger_initial_replan)
 
+        # Timer for continuous replanning
+        self.continuous_replan_timer = None
+
     def trigger_initial_replan(self):
         self.replan_requested = True
         self.get_logger().info("Initial replan triggered.")
         
         # Cancel the timer after the first replan
         self.initial_replan_timer.cancel()
+
+    def decision_callback(self, msg: Int32):
+        self.non_cooperative = (msg.data == 1)
+
+    def wrench_callback(self, msg: WrenchStamped):
+        self.ho_force = math.sqrt(msg.wrench.force.x**2 + msg.wrench.force.y**2 + msg.wrench.force.z**2)
+
+        if self.test_mode and self.non_cooperative and self.ho_force > self.ho_upper_bound:
+            if self.force_timer_start is None:
+                self.force_timer_start = time.time()
+            elif time.time() - self.force_timer_start >= self.timer_duration:
+                self.force_threshold_exceeded = True
+                self.start_continuous_replanning()
+        else:
+            self.force_timer_start = None
+            self.force_threshold_exceeded = False
+            self.stop_continuous_replanning()
+
+    def start_continuous_replanning(self):
+        if self.continuous_replan_timer is None:
+            self.continuous_replan_timer = self.create_timer(0.5, self.trigger_replan)
+            self.get_logger().info("Continuous replanning started.")
+            
+
+    def stop_continuous_replanning(self):
+        if self.continuous_replan_timer is not None:
+            self.continuous_replan_timer.cancel()
+            self.continuous_replan_timer = None
+            self.get_logger().info("Continuous replanning stopped.")
+
+    def trigger_replan(self):
+        if self.ho_force < self.ho_lower_bound or not (self.test_mode and self.non_cooperative):
+            self.stop_continuous_replanning()
+        else:
+            self.replan_requested = True
 
     # Callback functions
     def obstacle_center_callback(self, msg: Float32MultiArray):
@@ -85,7 +135,7 @@ class RRTNode(Node):
 
         # Request replan if the distance to the ACS reference point exceeds the threshold
         if distance_to_reference > self.distance_threshold:
-            self.get_logger().info(f"Distance to ACS reference point is {distance_to_reference:.2f}, triggering replanning.")
+            # self.get_logger().info(f"Distance to ACS reference point is {distance_to_reference:.2f}, triggering replanning.")
             self.replan_requested = True
 
     def joy_callback(self, msg: Joy):

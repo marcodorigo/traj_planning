@@ -12,6 +12,12 @@ def generate_launch_description():
             description='Set to true to use the Wii controller'
         ),
 
+        DeclareLaunchArgument(
+            'test',
+            default_value='true',
+            description='Set to true to enable the test mode for additional replanning conditions'
+        ),
+
         Node(
             package='traj_planning',
             executable='rrt_planner_node',
