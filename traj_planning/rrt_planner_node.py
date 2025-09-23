@@ -19,8 +19,8 @@ class RRTNode(Node):
         self.use_wii_controller = self.get_parameter('use_wii_controller').get_parameter_value().bool_value
         self.test_mode = self.get_parameter('test').get_parameter_value().bool_value
 
-        self.obstacle_center = [0.0, 0.0, 0.0]
-        self.obstacle_radius = 0.0
+        self.spherical_obstacles = []  # List of spherical obstacles
+        self.cylinder_obstacle = None  # Cylinder obstacle (center, radius, height)
         self.workspace_radius = 1.0
         self.target_position = [0.0, 0.0, 0.0]
         self.starting_position = [0.0, 0.0, 0.0]
@@ -40,8 +40,8 @@ class RRTNode(Node):
 
         self.timer = self.create_timer(1.0 / 25, self.plan_path)
 
-        self.create_subscription(Float32MultiArray, '/obstacle_center', self.obstacle_center_callback, 10)
-        self.create_subscription(Float32, '/obstacle_radius', self.obstacle_radius_callback, 10)
+        self.create_subscription(Float32MultiArray, '/spherical_obstacles', self.spherical_obstacles_callback, 10)
+        self.create_subscription(Float32MultiArray, '/cylinder_base', self.cylinder_obstacle_callback, 10)
         self.create_subscription(Float32, '/workspace_radius', self.workspace_radius_callback, 10)
         self.create_subscription(Float32MultiArray, '/target_position', self.target_position_callback, 10)
         self.create_subscription(PoseStamped, '/admittance_controller/pose_debug', self.starting_position_callback, 10)
@@ -56,7 +56,7 @@ class RRTNode(Node):
             self.create_subscription(Joy, '/falcon0/buttons', self.joy_callback, 10)
 
         self.marker_publisher = self.create_publisher(Marker, '/visualization_marker', 10)
-        self.path_publisher = self.create_publisher(Float32MultiArray, '/rrt_path', 10) #TODO: clear up rrt_path & rrt_trajectory confusion (visualizer node publishes on trajectory)
+        self.path_publisher = self.create_publisher(Float32MultiArray, '/rrt_path', 10)
 
         self.goal_sample_rate = 0.1
         self.step_size = 0.1
@@ -114,11 +114,16 @@ class RRTNode(Node):
             self.replan_requested = True
 
     # Callback functions
-    def obstacle_center_callback(self, msg: Float32MultiArray):
-        self.obstacle_center = msg.data
+    def spherical_obstacles_callback(self, msg: Float32MultiArray):
+        self.spherical_obstacles = []
+        data = msg.data
+        for i in range(0, len(data), 4):  # Each obstacle has 4 values: x, y, z, radius
+            self.spherical_obstacles.append((data[i], data[i+1], data[i+2], data[i+3]))
 
-    def obstacle_radius_callback(self, msg: Float32):
-        self.obstacle_radius = msg.data
+    def cylinder_obstacle_callback(self, msg: Float32MultiArray):
+        data = msg.data
+        if len(data) == 5:  # Cylinder has 5 values: x, y, z (center), radius, height
+            self.cylinder_obstacle = (data[0], data[1], data[2], data[3], data[4])
 
     def workspace_radius_callback(self, msg: Float32):
         self.workspace_radius = msg.data
@@ -155,10 +160,9 @@ class RRTNode(Node):
 
         self.replan_requested = False  # Reset trigger
 
-        if self.obstacle_radius > 0:
-            obstacles = [(self.obstacle_center[0], self.obstacle_center[1], self.obstacle_center[2], self.obstacle_radius + self.buffer)] # Add small buffer to obstacle radius
-        else:
-            obstacles = []
+        obstacles = self.spherical_obstacles[:]
+        if self.cylinder_obstacle:
+            obstacles.append(self.cylinder_obstacle)
 
         if self.is_point_in_obstacle(self.starting_position, obstacles) or self.is_point_in_obstacle(self.target_position, obstacles):
             # self.get_logger().info(f"Start or target position is inside an obstacle. Cannot plan path.")
@@ -180,6 +184,19 @@ class RRTNode(Node):
     def distance(self, p1, p2):
         return math.sqrt(sum((p2[i] - p1[i])**2 for i in range(3)))
 
+    def is_point_in_obstacle(self, point, obstacles):
+        for obstacle in obstacles:
+            if len(obstacle) == 4:  # Spherical obstacle
+                ox, oy, oz, r = obstacle
+                if (point[0] - ox)**2 + (point[1] - oy)**2 + (point[2] - oz)**2 <= r**2:
+                    return True
+            elif len(obstacle) == 5:  # Cylindrical obstacle
+                cx, cy, cz, radius, height = obstacle
+                dx, dy = point[0] - cx, point[1] - cy
+                if dx**2 + dy**2 <= radius**2 and cz <= point[2] <= cz + height:
+                    return True
+        return False
+
     def line_circle_collision(self, p1, p2, circle):
         cx, cy, cz, r = circle
         dx, dy, dz = [p2[i] - p1[i] for i in range(3)]
@@ -197,8 +214,40 @@ class RRTNode(Node):
         t2 = (-b + discriminant) / (2 * a)
         return (0 <= t1 <= 1) or (0 <= t2 <= 1)
 
+    def line_cylinder_collision(self, p1, p2, cylinder):
+        cx, cy, cz, radius, height = cylinder
+        dx, dy, dz = [p2[i] - p1[i] for i in range(3)]
+        fx, fy, fz = [p1[i] - cx if i < 2 else p1[i] - cz for i in range(3)]
+
+        # Check for horizontal collision (cylinder's circular base)
+        a = dx**2 + dy**2
+        b = 2 * (fx * dx + fy * dy)
+        c = fx**2 + fy**2 - radius**2
+
+        discriminant = b**2 - 4 * a * c
+        if discriminant >= 0:
+            discriminant = math.sqrt(discriminant)
+            t1 = (-b - discriminant) / (2 * a)
+            t2 = (-b + discriminant) / (2 * a)
+
+            # Check if the intersection points are within the cylinder's height
+            for t in [t1, t2]:
+                if 0 <= t <= 1:
+                    z_intersection = p1[2] + t * dz
+                    if cz <= z_intersection <= cz + height:
+                        return True
+
+        return False
+
     def is_collision_free(self, p1, p2, obstacles):
-        return all(not self.line_circle_collision(p1, p2, c) for c in obstacles)
+        for obstacle in obstacles:
+            if len(obstacle) == 4:  # Spherical obstacle
+                if self.line_circle_collision(p1, p2, obstacle):
+                    return False
+            elif len(obstacle) == 5:  # Cylindrical obstacle
+                if self.line_cylinder_collision(p1, p2, obstacle):
+                    return False
+        return True
 
     def get_nearest_node(self, nodes, point):
         return min(nodes, key=lambda node: self.distance(node.point, point))
@@ -251,7 +300,7 @@ class RRTNode(Node):
         if not path or len(path) < 3:
             return path
         smoothed = [path[0]]
-        i = 0
+        i = 0  # Initialize i before the loop
         while i < len(path) - 1:
             j = len(path) - 1
             while j > i + 1:
@@ -261,12 +310,6 @@ class RRTNode(Node):
             smoothed.append(path[j])
             i = j
         return smoothed
-
-    def is_point_in_obstacle(self, point, obstacles):
-        for ox, oy, oz, r in obstacles:
-            if (point[0] - ox)**2 + (point[1] - oy)**2 + (point[2] - oz)**2 <= r**2:
-                return True
-        return False
 
     def publish_path(self, path):
         path_msg = Float32MultiArray()
