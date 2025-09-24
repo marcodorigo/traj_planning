@@ -119,28 +119,34 @@ class RRTNode(Node):
         data = msg.data
         for i in range(0, len(data), 4):  # Each obstacle has 4 values: x, y, z, radius
             self.spherical_obstacles.append((data[i], data[i+1], data[i+2], data[i+3]))
+        self.get_logger().debug(f"Updated spherical obstacles: {self.spherical_obstacles}")
 
     def cylinder_obstacle_callback(self, msg: Float32MultiArray):
         data = msg.data
         if len(data) == 5:  # Cylinder has 5 values: x, y, z (center), radius, height
             self.cylinder_obstacle = (data[0], data[1], data[2], data[3], data[4])
+        self.get_logger().debug(f"Updated cylinder obstacle: {self.cylinder_obstacle}")
 
     def workspace_radius_callback(self, msg: Float32):
         self.workspace_radius = msg.data
+        self.get_logger().debug(f"Updated workspace radius: {self.workspace_radius}")
 
     def target_position_callback(self, msg: Float32MultiArray):
         self.target_position = msg.data[:3]
+        self.get_logger().debug(f"Updated target position: {self.target_position}")
 
     def starting_position_callback(self, msg: PoseStamped):
         self.starting_position = [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]
+        self.get_logger().debug(f"Updated starting position: {self.starting_position}")
 
     def acs_reference_point_callback(self, msg: PoseStamped):
         self.acs_reference_point = [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]
         distance_to_reference = self.distance(self.starting_position, self.acs_reference_point)
+        self.get_logger().debug(f"Distance to ACS reference point: {distance_to_reference}")
 
         # Request replan if the distance to the ACS reference point exceeds the threshold
         if distance_to_reference > self.distance_threshold:
-            # self.get_logger().info(f"Distance to ACS reference point is {distance_to_reference:.2f}, triggering replanning.")
+            self.get_logger().info(f"Distance to ACS reference point exceeded threshold. Triggering replanning.")
             self.replan_requested = True
 
     def joy_callback(self, msg: Joy):
@@ -151,6 +157,7 @@ class RRTNode(Node):
             # Request replanning on button press
             if current_button_state == 1 and self.last_button_state == 0:
                 self.replan_requested = True
+                self.get_logger().info("Replan requested via joystick button.")
             self.last_button_state = current_button_state
 
     # RRT Algorithm and Path Planning
@@ -159,13 +166,18 @@ class RRTNode(Node):
             return
 
         self.replan_requested = False  # Reset trigger
+        self.get_logger().info("Starting RRT path planning...")
 
         obstacles = self.spherical_obstacles[:]
         if self.cylinder_obstacle:
             obstacles.append(self.cylinder_obstacle)
 
+        self.get_logger().debug(f"Obstacles: {obstacles}")
+        self.get_logger().debug(f"Starting position: {self.starting_position}")
+        self.get_logger().debug(f"Target position: {self.target_position}")
+
         if self.is_point_in_obstacle(self.starting_position, obstacles) or self.is_point_in_obstacle(self.target_position, obstacles):
-            # self.get_logger().info(f"Start or target position is inside an obstacle. Cannot plan path.")
+            self.get_logger().error("Start or target position is inside an obstacle. Cannot plan path.")
             return
 
         path, duration = self.build_rrt(
@@ -179,7 +191,10 @@ class RRTNode(Node):
         )
 
         if path:
+            self.get_logger().info(f"Path found in {duration:.2f} seconds. Path: {path}")
             self.publish_path(path)
+        else:
+            self.get_logger().error("Failed to find a path within the maximum iterations.")
 
     def distance(self, p1, p2):
         return math.sqrt(sum((p2[i] - p1[i])**2 for i in range(3)))
@@ -197,75 +212,56 @@ class RRTNode(Node):
                     return True
         return False
 
-    def line_circle_collision(self, p1, p2, circle):
-        cx, cy, cz, r = circle
-        dx, dy, dz = [p2[i] - p1[i] for i in range(3)]
-        fx, fy, fz = [p1[i] - circle[i] for i in range(3)]
-
-        a = dx**2 + dy**2 + dz**2
-        b = 2 * (fx * dx + fy * dy + fz * dz)
-        c = fx**2 + fy**2 + fz**2 - r**2
-
-        discriminant = b**2 - 4 * a * c
-        if discriminant < 0:
-            return False
-        discriminant = math.sqrt(discriminant)
-        t1 = (-b - discriminant) / (2 * a)
-        t2 = (-b + discriminant) / (2 * a)
-        return (0 <= t1 <= 1) or (0 <= t2 <= 1)
-
-    def line_cylinder_collision(self, p1, p2, cylinder):
-        cx, cy, cz, radius, height = cylinder
-        dx, dy, dz = [p2[i] - p1[i] for i in range(3)]
-        fx, fy, fz = [p1[i] - cx if i < 2 else p1[i] - cz for i in range(3)]
-
-        # Check for horizontal collision (cylinder's circular base)
-        a = dx**2 + dy**2
-        b = 2 * (fx * dx + fy * dy)
-        c = fx**2 + fy**2 - radius**2
-
-        discriminant = b**2 - 4 * a * c
-        if discriminant >= 0:
-            discriminant = math.sqrt(discriminant)
-            t1 = (-b - discriminant) / (2 * a)
-            t2 = (-b + discriminant) / (2 * a)
-
-            # Check if the intersection points are within the cylinder's height
-            for t in [t1, t2]:
-                if 0 <= t <= 1:
-                    z_intersection = p1[2] + t * dz
-                    if cz <= z_intersection <= cz + height:
-                        return True
-
-        return False
-
-    def is_collision_free(self, p1, p2, obstacles):
+    def is_collision_free(self, point1, point2, obstacles):
+        """Check if the line segment between point1 and point2 is collision-free."""
         for obstacle in obstacles:
             if len(obstacle) == 4:  # Spherical obstacle
-                if self.line_circle_collision(p1, p2, obstacle):
+                ox, oy, oz, r = obstacle
+                if self.line_intersects_sphere(point1, point2, (ox, oy, oz), r):
                     return False
             elif len(obstacle) == 5:  # Cylindrical obstacle
-                if self.line_cylinder_collision(p1, p2, obstacle):
+                cx, cy, cz, radius, height = obstacle
+                if self.line_intersects_cylinder(point1, point2, (cx, cy, cz), radius, height):
                     return False
         return True
 
-    def get_nearest_node(self, nodes, point):
-        return min(nodes, key=lambda node: self.distance(node.point, point))
+    def line_intersects_sphere(self, p1, p2, center, radius):
+        """Check if the line segment between p1 and p2 intersects a sphere."""
+        cx, cy, cz = center
+        px, py, pz = p1
+        qx, qy, qz = p2
+        dx, dy, dz = qx - px, qy - py, qz - pz
+        a = dx**2 + dy**2 + dz**2
+        b = 2 * (dx * (px - cx) + dy * (py - cy) + dz * (pz - cz))
+        c = (px - cx)**2 + (py - cy)**2 + (pz - cz)**2 - radius**2
+        discriminant = b**2 - 4 * a * c
+        return discriminant >= 0
 
-    def generate_random_point(self, radius):
-        while True:
-            x = random.uniform(-radius, radius)
-            y = random.uniform(-radius, radius)
-            z = random.uniform(0, radius)
-            if x**2 + y**2 + z**2 <= radius**2:
-                return [x, y, z]
+    def line_intersects_cylinder(self, p1, p2, center, radius, height):
+        """Check if the line segment between p1 and p2 intersects a cylinder."""
+        cx, cy, cz = center
+        px, py, pz = p1
+        qx, qy, qz = p2
+        dx, dy = qx - px, qy - py
+        a = dx**2 + dy**2
+        b = 2 * (dx * (px - cx) + dy * (py - cy))
+        c = (px - cx)**2 + (py - cy)**2 - radius**2
+        discriminant = b**2 - 4 * a * c
+        if discriminant < 0:
+            return False
+        z_min, z_max = cz, cz + height
+        t1 = (-b - math.sqrt(discriminant)) / (2 * a)
+        t2 = (-b + math.sqrt(discriminant)) / (2 * a)
+        z1 = pz + t1 * (qz - pz)
+        z2 = pz + t2 * (qz - pz)
+        return (0 <= t1 <= 1 and z_min <= z1 <= z_max) or (0 <= t2 <= 1 and z_min <= z2 <= z_max)
 
     def build_rrt(self, start, goal, obstacles, radius, goal_sample_rate, step_size=0.1, max_iters=5000):
         start_time = time.perf_counter()
         start_node = RRTTreeNode(start)
         nodes = [start_node]
 
-        for _ in range(max_iters):
+        for i in range(max_iters):
             rnd_point = goal if random.random() < goal_sample_rate else self.generate_random_point(radius)
             nearest = self.get_nearest_node(nodes, rnd_point)
             direction = [rnd_point[i] - nearest.point[i] for i in range(3)]
@@ -284,37 +280,67 @@ class RRTNode(Node):
                     nodes.append(goal_node)
                     path = self.extract_path(goal_node)
                     end_time = time.perf_counter()
+                    self.get_logger().debug(f"RRT path successfully built in {end_time - start_time:.2f} seconds.")
                     return self.smooth_path(path, obstacles), end_time - start_time
 
         end_time = time.perf_counter()
+        self.get_logger().debug(f"RRT failed to find a path in {end_time - start_time:.2f} seconds.")
         return None, end_time - start_time
-
-    def extract_path(self, node):
-        path = []
-        while node:
-            path.append(node.point)
-            node = node.parent
-        return path[::-1]
-
-    def smooth_path(self, path, obstacles):
-        if not path or len(path) < 3:
-            return path
-        smoothed = [path[0]]
-        i = 0  # Initialize i before the loop
-        while i < len(path) - 1:
-            j = len(path) - 1
-            while j > i + 1:
-                if self.is_collision_free(path[i], path[j], obstacles):
-                    break
-                j -= 1
-            smoothed.append(path[j])
-            i = j
-        return smoothed
 
     def publish_path(self, path):
         path_msg = Float32MultiArray()
         path_msg.data = [coord for point in path for coord in point]
         self.path_publisher.publish(path_msg)
+        self.get_logger().info("Published RRT path.")
+
+    def generate_random_point(self, radius):
+        """Generate a random point within the workspace radius."""
+        while True:
+            x = random.uniform(-radius, radius)
+            y = random.uniform(-radius, radius)
+            z = random.uniform(0, radius)
+            if x**2 + y**2 + z**2 <= radius**2:  # Ensure the point is within the sphere
+                return [x, y, z]
+
+    def get_nearest_node(self, nodes, point):
+        """Find the nearest node in the RRT tree to the given point."""
+        nearest_node = None
+        min_distance = float('inf')
+        for node in nodes:
+            dist = self.distance(node.point, point)
+            if dist < min_distance:
+                nearest_node = node
+                min_distance = dist
+        return nearest_node
+
+    def extract_path(self, goal_node):
+        """Extract the path from the goal node to the start node."""
+        path = []
+        current = goal_node
+        while current is not None:
+            path.append(current.point)
+            current = current.parent
+        path.reverse()  # Reverse the path to go from start to goal
+        return path
+
+    def smooth_path(self, path, obstacles):
+        """Smooth the path by removing unnecessary intermediate points."""
+        if len(path) <= 2:
+            return path  # No smoothing needed for paths with 2 or fewer points
+
+        smoothed_path = [path[0]]  # Start with the first point
+        current_index = 0
+
+        while current_index < len(path) - 1:
+            next_index = len(path) - 1  # Start checking from the last point
+            while next_index > current_index + 1:
+                if self.is_collision_free(path[current_index], path[next_index], obstacles):
+                    break  # Found a valid shortcut
+                next_index -= 1
+            smoothed_path.append(path[next_index])
+            current_index = next_index
+
+        return smoothed_path
 
 class RRTTreeNode:
     def __init__(self, point, parent=None):

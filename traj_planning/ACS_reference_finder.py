@@ -18,7 +18,7 @@ class PathMatcher(Node):
 
         # Subscribers
         self.pred_pose_sub = self.create_subscription(PoseStamped, '/predicted_pose', self.predicted_pose_callback, 10)
-        self.path_sub = self.create_subscription(Path, '/rrt_trajectory', self.path_callback, 10)
+        self.path_sub = self.create_subscription(Path, '/rrt_path_viz', self.path_callback, 10)
 
         # Publishers
         self.closest_pub = self.create_publisher(PoseStamped, '/ACS_reference_point', 10)
@@ -30,7 +30,7 @@ class PathMatcher(Node):
         poses = msg.poses
 
         if len(poses) < 2:
-            self.get_logger().warn("RRT path has too few points.")
+            # self.get_logger().warn("RRT path has too few points.")
             return
 
         # Extract positions
@@ -45,7 +45,7 @@ class PathMatcher(Node):
         total_dist = cum_dist[-1]
 
         if total_dist == 0:
-            self.get_logger().warn("RRT path total length is zero.")
+            # self.get_logger().warn("RRT path total length is zero.")
             return
 
         # Resample to 1000 points
@@ -68,7 +68,7 @@ class PathMatcher(Node):
         self.latest_pred_pose = msg
         
         if not self.path_points:
-            self.get_logger().warn("No interpolated path available yet.")
+            # self.get_logger().warn("No interpolated path available yet.")
             return
 
         pred_pos = np.array([
