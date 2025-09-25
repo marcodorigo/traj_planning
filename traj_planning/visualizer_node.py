@@ -150,12 +150,15 @@ class LineVisualizerNode(Node):
 
         # Add spherical obstacle markers
         for i, obstacle in enumerate(self.spherical_obstacles):
+            # Determine obstacle marker color based on distance to obstacles
+            obstacle_color = (1.0, 0.0, 0.0) if self.dist_to_obstacles == 0 else (0.0, 0.0, 1.0)
+
             marker_array.markers.append(
                 self.make_sphere_marker(
                     id=100 + i,
                     position=obstacle["center"],
                     radius=obstacle["radius"],
-                    color_rgb=(0.0, 0.0, 1.0),
+                    color_rgb=obstacle_color,
                     namespace="spherical_obstacle"
                 )
             )
@@ -178,7 +181,7 @@ class LineVisualizerNode(Node):
                 id=300,
                 position=self.target_position,
                 radius=0.05,  # Fixed radius for the target marker
-                color_rgb=(1.0, 0.0, 0.0),  # Red color
+                color_rgb=(0.0, 1.0, 0.0),  # Green color
                 namespace="target_marker"
             )
         )
