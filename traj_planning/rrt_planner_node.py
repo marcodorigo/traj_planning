@@ -379,6 +379,130 @@ class RRTNode(Node):
         self.active_obstacle_marker_publisher.publish(marker)
         self.get_logger().debug("Published active obstacle marker.")
 
+    def generate_random_point(self, radius):
+        """
+        Generate a random point within a spherical workspace of the given radius.
+        :param radius: The radius of the workspace.
+        :return: A random point [x, y, z] within the workspace.
+        """
+        while True:
+            # Generate random coordinates within a cube of side length 2*radius
+            x = random.uniform(-radius, radius)
+            y = random.uniform(-radius, radius)
+            z = random.uniform(0, radius)
+
+            # Check if the point lies within the sphere of the given radius
+            if x**2 + y**2 + z**2 <= radius**2:
+                return [x, y, z]
+
+    def sample_near(self, center, radius):
+        """
+        Generate a random point near the given center within a specified radius.
+        :param center: The center point [x, y, z].
+        :param radius: The radius within which to sample.
+        :return: A random point [x, y, z] near the center.
+        """
+        while True:
+            # Generate random offsets within the radius
+            offset = [random.uniform(-radius, radius) for _ in range(3)]
+            sample = [center[i] + offset[i] for i in range(3)]
+
+            # Check if the sample lies within the sphere of the given radius
+            if self.distance(center, sample) <= radius:
+                return sample
+
+    def get_nearest_node(self, nodes, point):
+        """
+        Find the nearest node in the RRT tree to the given point.
+        :param nodes: A list of RRTTreeNode objects.
+        :param point: The target point [x, y, z].
+        :return: The nearest RRTTreeNode.
+        """
+        return min(nodes, key=lambda node: self.distance(node.point, point))
+
+    def extract_path(self, goal_node):
+        """
+        Extract the path from the goal node back to the start node.
+        :param goal_node: The goal RRTTreeNode.
+        :return: A list of points representing the path.
+        """
+        path = []
+        current_node = goal_node
+
+        while current_node is not None:
+            path.append(current_node.point)
+            current_node = current_node.parent
+
+        path.reverse()  # Reverse the path to go from start to goal
+        return path
+    
+    def smooth_path(self, path, obstacles):
+        """
+        Smooth the path by removing unnecessary waypoints.
+        :param path: A list of points representing the path.
+        :param obstacles: A list of obstacles to check for collisions.
+        :return: A smoothed path.
+        """
+        if len(path) <= 2:
+            return path  # No smoothing needed for paths with 2 or fewer points
+
+        smoothed_path = [path[0]]  # Start with the first point
+
+        i = 0
+        while i < len(path) - 1:
+            j = len(path) - 1
+            while j > i + 1:
+                if self.is_collision_free(path[i], path[j], obstacles):
+                    break
+                j -= 1
+            smoothed_path.append(path[j])
+            i = j
+
+        return smoothed_path
+    
+    def ho_force_direction(self):
+        """
+        Compute the normalized direction of the operator's force.
+        :return: A normalized vector [x, y, z] representing the force direction.
+        """
+        norm = math.sqrt(self.ho_force**2)
+        if norm == 0:
+            return [0.0, 0.0, 0.0]
+        return [self.ho_force / norm for _ in range(3)]
+    
+    def normalize(self, vector):
+        """
+        Normalize a vector.
+        :param vector: The input vector [x, y, z].
+        :return: A normalized vector [x, y, z].
+        """
+        norm = math.sqrt(sum(v**2 for v in vector))
+        if norm == 0:
+            return [0.0, 0.0, 0.0]
+        return [v / norm for v in vector]
+
+
+    def get_closest_obstacle(self, obstacles, point):
+        """
+        Find the closest obstacle to the given point.
+        :param obstacles: A list of obstacles, where each obstacle is either a sphere (x, y, z, radius)
+                        or a cylinder (x, y, z, radius, height).
+        :param point: The reference point [x, y, z].
+        :return: The closest obstacle to the given point.
+        """
+        return min(obstacles, key=lambda obs: self.distance(point, obs[:3]))
+
+    def publish_path(self, path):
+        """
+        Publish the planned path as a Float32MultiArray message.
+        :param path: A list of points representing the path, where each point is [x, y, z].
+        """
+        path_msg = Float32MultiArray()
+        path_msg.data = [coordinate for point in path for coordinate in point]  # Flatten the list of points
+        self.path_publisher.publish(path_msg)
+        self.get_logger().info("Published the planned path.")
+
+
 class RRTTreeNode:
     def __init__(self, point, parent=None):
         self.point = point
