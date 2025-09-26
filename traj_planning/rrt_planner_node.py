@@ -5,6 +5,7 @@ from geometry_msgs.msg import PoseStamped, WrenchStamped
 from visualization_msgs.msg import Marker
 from sensor_msgs.msg import Joy
 from std_msgs.msg import Int32
+from nav_msgs.msg import Path
 import random
 import math
 import time
@@ -58,6 +59,10 @@ class RRTNode(Node):
         self.marker_publisher = self.create_publisher(Marker, '/visualization_marker', 10)
         self.path_publisher = self.create_publisher(Float32MultiArray, '/rrt_path', 10)
 
+        # Publishers for connecting line and active obstacle marker
+        self.connecting_line_publisher = self.create_publisher(Path, '/connecting_line', 10)
+        self.active_obstacle_marker_publisher = self.create_publisher(Marker, '/active_obstacle_marker', 10)
+
         self.goal_sample_rate = 0.1
         self.step_size = 0.1
         self.max_iters = 5000
@@ -74,8 +79,6 @@ class RRTNode(Node):
     def trigger_initial_replan(self):
         self.replan_requested = True
         self.get_logger().info("Initial replan triggered.")
-        
-        # Cancel the timer after the first replan
         self.initial_replan_timer.cancel()
 
     def decision_callback(self, msg: Int32):
@@ -99,7 +102,6 @@ class RRTNode(Node):
         if self.continuous_replan_timer is None:
             self.continuous_replan_timer = self.create_timer(0.5, self.trigger_replan)
             self.get_logger().info("Continuous replanning started.")
-            
 
     def stop_continuous_replanning(self):
         if self.continuous_replan_timer is not None:
@@ -144,17 +146,13 @@ class RRTNode(Node):
         distance_to_reference = self.distance(self.starting_position, self.acs_reference_point)
         self.get_logger().debug(f"Distance to ACS reference point: {distance_to_reference}")
 
-        # Request replan if the distance to the ACS reference point exceeds the threshold
         if distance_to_reference > self.distance_threshold:
             self.get_logger().info(f"Distance to ACS reference point exceeded threshold. Triggering replanning.")
             self.replan_requested = True
 
     def joy_callback(self, msg: Joy):
         if len(msg.buttons) > 2:
-            # Use button index based on the parameter
             current_button_state = msg.buttons[2] if self.use_wii_controller else msg.buttons[1]
-
-            # Request replanning on button press
             if current_button_state == 1 and self.last_button_state == 0:
                 self.replan_requested = True
                 self.get_logger().info("Replan requested via joystick button.")
@@ -165,16 +163,12 @@ class RRTNode(Node):
         if not self.replan_requested:
             return
 
-        self.replan_requested = False  # Reset trigger
+        self.replan_requested = False
         self.get_logger().info("Starting RRT path planning...")
 
         obstacles = self.spherical_obstacles[:]
         if self.cylinder_obstacle:
             obstacles.append(self.cylinder_obstacle)
-
-        self.get_logger().debug(f"Obstacles: {obstacles}")
-        self.get_logger().debug(f"Starting position: {self.starting_position}")
-        self.get_logger().debug(f"Target position: {self.target_position}")
 
         if self.is_point_in_obstacle(self.starting_position, obstacles) or self.is_point_in_obstacle(self.target_position, obstacles):
             self.get_logger().error("Start or target position is inside an obstacle. Cannot plan path.")
@@ -213,7 +207,6 @@ class RRTNode(Node):
         return False
 
     def is_collision_free(self, point1, point2, obstacles):
-        """Check if the line segment between point1 and point2 is collision-free."""
         for obstacle in obstacles:
             if len(obstacle) == 4:  # Spherical obstacle
                 ox, oy, oz, r = obstacle
@@ -226,7 +219,6 @@ class RRTNode(Node):
         return True
 
     def line_intersects_sphere(self, p1, p2, center, radius):
-        """Check if the line segment between p1 and p2 intersects a sphere."""
         cx, cy, cz = center
         px, py, pz = p1
         qx, qy, qz = p2
@@ -238,7 +230,6 @@ class RRTNode(Node):
         return discriminant >= 0
 
     def line_intersects_cylinder(self, p1, p2, center, radius, height):
-        """Check if the line segment between p1 and p2 intersects a cylinder."""
         cx, cy, cz = center
         px, py, pz = p1
         qx, qy, qz = p2
@@ -261,15 +252,38 @@ class RRTNode(Node):
         start_node = RRTTreeNode(start)
         nodes = [start_node]
 
+        bias_distance = 0.2
+        bias_radius = 0.3
+        p_bias = 0.3
+
         for i in range(max_iters):
-            rnd_point = goal if random.random() < goal_sample_rate else self.generate_random_point(radius)
-            nearest = self.get_nearest_node(nodes, rnd_point)
-            direction = [rnd_point[i] - nearest.point[i] for i in range(3)]
+            connecting_line = (start, goal)
+            self.publish_connecting_line(connecting_line)
+
+            intersecting_obstacles = self.find_intersecting_obstacles(connecting_line, obstacles)
+
+            if intersecting_obstacles:
+                active_obstacle = self.get_closest_obstacle(intersecting_obstacles, start)
+                obs_center = active_obstacle[:3]
+                self.publish_active_obstacle_marker(obs_center)
+
+                offset_dir = self.normalize(self.ho_force_direction())
+                via_point = [obs_center[j] + bias_distance * offset_dir[j] for j in range(3)]
+            else:
+                via_point = None
+
+            if via_point and random.random() < p_bias:
+                sample = self.sample_near(via_point, bias_radius)
+            else:
+                sample = self.generate_random_point(radius)
+
+            nearest = self.get_nearest_node(nodes, sample)
+            direction = [sample[j] - nearest.point[j] for j in range(3)]
             norm = math.sqrt(sum(d**2 for d in direction))
             if norm == 0:
                 continue
             direction = [d / norm for d in direction]
-            new_point = [nearest.point[i] + step_size * direction[i] for i in range(3)]
+            new_point = [nearest.point[j] + step_size * direction[j] for j in range(3)]
 
             if self.is_collision_free(nearest.point, new_point, obstacles):
                 new_node = RRTTreeNode(new_point, nearest)
@@ -280,67 +294,90 @@ class RRTNode(Node):
                     nodes.append(goal_node)
                     path = self.extract_path(goal_node)
                     end_time = time.perf_counter()
-                    self.get_logger().debug(f"RRT path successfully built in {end_time - start_time:.2f} seconds.")
+                    self.get_logger().debug(f"Biased RRT path successfully built in {end_time - start_time:.2f} seconds.")
                     return self.smooth_path(path, obstacles), end_time - start_time
 
         end_time = time.perf_counter()
-        self.get_logger().debug(f"RRT failed to find a path in {end_time - start_time:.2f} seconds.")
+        self.get_logger().debug(f"Biased RRT failed to find a path in {end_time - start_time:.2f} seconds.")
         return None, end_time - start_time
 
-    def publish_path(self, path):
-        path_msg = Float32MultiArray()
-        path_msg.data = [coord for point in path for coord in point]
-        self.path_publisher.publish(path_msg)
-        self.get_logger().info("Published RRT path.")
+    def find_intersecting_obstacles(self, line, obstacles):
+        """
+        Find obstacles that intersect the given line segment.
+        :param line: A tuple containing the start and end points of the line segment (start, end).
+        :param obstacles: A list of obstacles, where each obstacle is either a sphere (x, y, z, radius)
+                          or a cylinder (x, y, z, radius, height).
+        :return: A list of obstacles that intersect the line segment.
+        """
+        start, end = line
+        intersecting_obstacles = []
 
-    def generate_random_point(self, radius):
-        """Generate a random point within the workspace radius."""
-        while True:
-            x = random.uniform(-radius, radius)
-            y = random.uniform(-radius, radius)
-            z = random.uniform(0, radius)
-            if x**2 + y**2 + z**2 <= radius**2:  # Ensure the point is within the sphere
-                return [x, y, z]
+        for obstacle in obstacles:
+            if len(obstacle) == 4:  # Spherical obstacle
+                center = obstacle[:3]
+                radius = obstacle[3]
+                if self.line_intersects_sphere(start, end, center, radius):
+                    intersecting_obstacles.append(obstacle)
+            elif len(obstacle) == 5:  # Cylindrical obstacle
+                center = obstacle[:3]
+                radius = obstacle[3]
+                height = obstacle[4]
+                if self.line_intersects_cylinder(start, end, center, radius, height):
+                    intersecting_obstacles.append(obstacle)
 
-    def get_nearest_node(self, nodes, point):
-        """Find the nearest node in the RRT tree to the given point."""
-        nearest_node = None
-        min_distance = float('inf')
-        for node in nodes:
-            dist = self.distance(node.point, point)
-            if dist < min_distance:
-                nearest_node = node
-                min_distance = dist
-        return nearest_node
+        return intersecting_obstacles
 
-    def extract_path(self, goal_node):
-        """Extract the path from the goal node to the start node."""
-        path = []
-        current = goal_node
-        while current is not None:
-            path.append(current.point)
-            current = current.parent
-        path.reverse()  # Reverse the path to go from start to goal
-        return path
+    def publish_connecting_line(self, connecting_line):
+        start, goal = connecting_line
+        path_msg = Path()
+        path_msg.header.frame_id = "world"
+        path_msg.header.stamp = self.get_clock().now().to_msg()
 
-    def smooth_path(self, path, obstacles):
-        """Smooth the path by removing unnecessary intermediate points."""
-        if len(path) <= 2:
-            return path  # No smoothing needed for paths with 2 or fewer points
+        start_pose = PoseStamped()
+        start_pose.header = path_msg.header
+        start_pose.pose.position.x = start[0]
+        start_pose.pose.position.y = start[1]
+        start_pose.pose.position.z = start[2]
+        path_msg.poses.append(start_pose)
 
-        smoothed_path = [path[0]]  # Start with the first point
-        current_index = 0
+        goal_pose = PoseStamped()
+        goal_pose.header = path_msg.header
+        goal_pose.pose.position.x = goal[0]
+        goal_pose.pose.position.y = goal[1]
+        goal_pose.pose.position.z = goal[2]
+        path_msg.poses.append(goal_pose)
 
-        while current_index < len(path) - 1:
-            next_index = len(path) - 1  # Start checking from the last point
-            while next_index > current_index + 1:
-                if self.is_collision_free(path[current_index], path[next_index], obstacles):
-                    break  # Found a valid shortcut
-                next_index -= 1
-            smoothed_path.append(path[next_index])
-            current_index = next_index
+        self.connecting_line_publisher.publish(path_msg)
+        self.get_logger().debug("Published connecting line.")
 
-        return smoothed_path
+    def publish_active_obstacle_marker(self, obs_center):
+        marker = Marker()
+        marker.header.frame_id = "world"
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = "active_obstacle"
+        marker.id = 0
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+
+        marker.pose.position.x = obs_center[0]
+        marker.pose.position.y = obs_center[1]
+        marker.pose.position.z = obs_center[2]
+        marker.pose.orientation.x = 0.0
+        marker.pose.orientation.y = 0.0
+        marker.pose.orientation.z = 0.0
+        marker.pose.orientation.w = 1.0
+
+        marker.scale.x = 0.1
+        marker.scale.y = 0.1
+        marker.scale.z = 0.1
+
+        marker.color.r = 1.0
+        marker.color.g = 0.0
+        marker.color.b = 0.0
+        marker.color.a = 1.0
+
+        self.active_obstacle_marker_publisher.publish(marker)
+        self.get_logger().debug("Published active obstacle marker.")
 
 class RRTTreeNode:
     def __init__(self, point, parent=None):
