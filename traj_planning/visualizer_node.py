@@ -175,7 +175,7 @@ class LineVisualizerNode(Node):
             )
         )
 
-        # Add target marker (red sphere)
+        # Add target marker (green sphere)
         marker_array.markers.append(
             self.make_sphere_marker(
                 id=300,
