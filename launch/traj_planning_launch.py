@@ -43,10 +43,4 @@ def generate_launch_description():
             name='ACS_reference_finder',
             output='screen',
         ),
-        Node(
-            package='common_config',
-            executable='parameter_publisher_node',
-            name='parameter_publisher_node',
-            output='screen',
-        ),
     ])
