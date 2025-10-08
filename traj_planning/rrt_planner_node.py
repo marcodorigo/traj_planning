@@ -16,11 +16,16 @@ class RRTNode(Node):
         # Declare and get the "use_wii_controller" and "test" parameters
         self.declare_parameter('use_wii_controller', False)
         self.declare_parameter('test', True)
+        # Add parameter for obstacle safety buffer
+        self.declare_parameter('obstacle_buffer', 0.05)
+        
         self.use_wii_controller = self.get_parameter('use_wii_controller').get_parameter_value().bool_value
         self.test_mode = self.get_parameter('test').get_parameter_value().bool_value
+        self.obstacle_buffer = self.get_parameter('obstacle_buffer').get_parameter_value().double_value
 
         self.spherical_obstacles = []  # List of spherical obstacles
-        self.cylinder_obstacle = None  # Cylinder obstacle (center, radius, height)
+        self.cylindrical_obstacles = []  # List of cylindrical obstacles
+        self.cylinder_obstacle = None  # Cylinder base obstacle (center, radius, height)
         self.workspace_radius = 1.0
         self.target_position = [0.0, 0.0, 0.0]
         self.starting_position = [0.0, 0.0, 0.0]
@@ -41,6 +46,7 @@ class RRTNode(Node):
         self.timer = self.create_timer(1.0 / 25, self.plan_path)
 
         self.create_subscription(Float32MultiArray, '/spherical_obstacles', self.spherical_obstacles_callback, 10)
+        self.create_subscription(Float32MultiArray, '/cylindrical_obstacles', self.cylindrical_obstacles_callback, 10)
         self.create_subscription(Float32MultiArray, '/cylinder_base', self.cylinder_obstacle_callback, 10)
         self.create_subscription(Float32, '/workspace_radius', self.workspace_radius_callback, 10)
         self.create_subscription(Float32MultiArray, '/target_position', self.target_position_callback, 10)
@@ -62,9 +68,8 @@ class RRTNode(Node):
         self.step_size = 0.1
         self.max_iters = 5000
 
-        self.distance_threshold = 0.05  # meters
-        self.buffer = 0.01              # meters
-
+        self.distance_threshold = 0.1  # meters (was 0.05)
+        
         # Delay the first replan request by 2 seconds to ensure other nodes are active
         self.initial_replan_timer = self.create_timer(2.0, self.trigger_initial_replan)
 
@@ -121,11 +126,18 @@ class RRTNode(Node):
             self.spherical_obstacles.append((data[i], data[i+1], data[i+2], data[i+3]))
         self.get_logger().debug(f"Updated spherical obstacles: {self.spherical_obstacles}")
 
+    def cylindrical_obstacles_callback(self, msg: Float32MultiArray):
+        self.cylindrical_obstacles = []
+        data = msg.data
+        for i in range(0, len(data), 5):  # Each obstacle has 5 values: x, y, z, radius, height
+            self.cylindrical_obstacles.append((data[i], data[i+1], data[i+2], data[i+3], data[i+4]))
+        self.get_logger().debug(f"Updated cylindrical obstacles: {self.cylindrical_obstacles}")
+
     def cylinder_obstacle_callback(self, msg: Float32MultiArray):
         data = msg.data
         if len(data) == 5:  # Cylinder has 5 values: x, y, z (center), radius, height
             self.cylinder_obstacle = (data[0], data[1], data[2], data[3], data[4])
-        self.get_logger().debug(f"Updated cylinder obstacle: {self.cylinder_obstacle}")
+        self.get_logger().debug(f"Updated cylinder base obstacle: {self.cylinder_obstacle}")
 
     def workspace_radius_callback(self, msg: Float32):
         self.workspace_radius = msg.data
@@ -168,7 +180,9 @@ class RRTNode(Node):
         self.replan_requested = False  # Reset trigger
         self.get_logger().info("Starting RRT path planning...")
 
+        # Combine all obstacles into one list
         obstacles = self.spherical_obstacles[:]
+        obstacles.extend(self.cylindrical_obstacles)
         if self.cylinder_obstacle:
             obstacles.append(self.cylinder_obstacle)
 
@@ -203,12 +217,18 @@ class RRTNode(Node):
         for obstacle in obstacles:
             if len(obstacle) == 4:  # Spherical obstacle
                 ox, oy, oz, r = obstacle
-                if (point[0] - ox)**2 + (point[1] - oy)**2 + (point[2] - oz)**2 <= r**2:
+                # Add buffer to radius
+                buffered_radius = r + self.obstacle_buffer
+                if (point[0] - ox)**2 + (point[1] - oy)**2 + (point[2] - oz)**2 <= buffered_radius**2:
                     return True
             elif len(obstacle) == 5:  # Cylindrical obstacle
                 cx, cy, cz, radius, height = obstacle
                 dx, dy = point[0] - cx, point[1] - cy
-                if dx**2 + dy**2 <= radius**2 and cz <= point[2] <= cz + height:
+                # Add buffer to radius and height
+                buffered_radius = radius + self.obstacle_buffer
+                buffered_height = height + (2 * self.obstacle_buffer)  # Add buffer to both top and bottom
+                buffered_z_min = cz - self.obstacle_buffer
+                if dx**2 + dy**2 <= buffered_radius**2 and buffered_z_min <= point[2] <= buffered_z_min + buffered_height:
                     return True
         return False
 
@@ -233,7 +253,9 @@ class RRTNode(Node):
         dx, dy, dz = qx - px, qy - py, qz - pz
         a = dx**2 + dy**2 + dz**2
         b = 2 * (dx * (px - cx) + dy * (py - cy) + dz * (pz - cz))
-        c = (px - cx)**2 + (py - cy)**2 + (pz - cz)**2 - radius**2
+        # Add buffer to radius
+        buffered_radius = radius + self.obstacle_buffer
+        c = (px - cx)**2 + (py - cy)**2 + (pz - cz)**2 - buffered_radius**2
         discriminant = b**2 - 4 * a * c
         return discriminant >= 0
 
@@ -245,11 +267,15 @@ class RRTNode(Node):
         dx, dy = qx - px, qy - py
         a = dx**2 + dy**2
         b = 2 * (dx * (px - cx) + dy * (py - cy))
-        c = (px - cx)**2 + (py - cy)**2 - radius**2
+        # Add buffer to radius
+        buffered_radius = radius + self.obstacle_buffer
+        c = (px - cx)**2 + (py - cy)**2 - buffered_radius**2
         discriminant = b**2 - 4 * a * c
         if discriminant < 0:
             return False
-        z_min, z_max = cz, cz + height
+        # Add buffer to height (both top and bottom)
+        z_min = cz - self.obstacle_buffer
+        z_max = cz + height + self.obstacle_buffer
         t1 = (-b - math.sqrt(discriminant)) / (2 * a)
         t2 = (-b + math.sqrt(discriminant)) / (2 * a)
         z1 = pz + t1 * (qz - pz)
