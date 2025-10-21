@@ -68,7 +68,7 @@ class RRTNode(Node):
         self.step_size = 0.1
         self.max_iters = 5000
 
-        self.distance_threshold = 0.1  # meters (was 0.05)
+        self.distance_threshold = 0.05  # meters 
         
         # Delay the first replan request by 2 seconds to ensure other nodes are active
         self.initial_replan_timer = self.create_timer(2.0, self.trigger_initial_replan)
